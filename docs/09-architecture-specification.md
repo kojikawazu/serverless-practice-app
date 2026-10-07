@@ -36,7 +36,11 @@
 ├── functions/            # Lambda 本体（handler とスタブ）
 │   ├── src/
 │   │   ├── handlers/     # enqueue / consumer / data-sync / notify-slack
-│   │   └── stubs/        # 外部サービスのスタブ
+│   │   ├── stubs/        # 外部サービスのスタブ
+│   │   ├── schemas/      # 入力の Zod スキーマ（型は z.infer で導出）
+│   │   ├── errors/       # エラークラス（name が Step Functions との契約）
+│   │   ├── types/        # 複数ファイルで使う型と、スタブが実装する口（interface）
+│   │   └── lib/          # 入力検証・構造化ロガーなどの共通処理
 │   └── test/
 ├── infra/
 │   ├── terraform/        # 土台（IAM・SQS・S3・Schedule group・SSM 出力）
@@ -78,7 +82,16 @@
 | BigQuery / Cuenote FC | 書き込み内容を構造化ログに出す |
 | S3 | スタブにせず、Terraform が作ったバケットへ実際に書く |
 
-handler はスタブを直接 import せず、インターフェース経由で受け取る。失敗の流れ（① 失敗通知・DLQ 行き）を試せるよう、Step Functions の実行入力で失敗を注入できるようにする（例: `{"failAt": "dataSync"}`）。
+handler はスタブを直接 import せず、インターフェース経由で受け取る。
+
+| インターフェース（`functions/src/types/`） | 役割 | 実装するスタブ |
+|---|---|---|
+| `RecipientRepository` | 配信対象を取得する | `MySqlStub` |
+| `MailSender` | メールを 1 通送る | `SendGridStub` |
+| `FailureNotifier` | 実行の失敗を知らせる | `SlackStub` |
+| `ExportWriter` | 配信対象の全件を書き出す | `BigQueryStub` / `CuenoteFcStub` |
+
+BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（全件を書く）が同じため、1 つのインターフェースにまとめる。失敗の流れ（① 失敗通知・DLQ 行き）を試せるよう、Step Functions の実行入力で失敗を注入できるようにする（例: `{"failAt": "dataSync"}`）。
 
 ### Step Functions の流れ
 
