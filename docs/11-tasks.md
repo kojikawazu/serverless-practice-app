@@ -29,7 +29,6 @@
 | タスク | 状態 | 優先度 |
 |--------|------|--------|
 | M2: Dependabot の設定（npm・GitHub Actions） | 未着手 | 中 |
-| M3: スキーマ（Zod）とエラークラス | 未着手 | 高 |
 | M3: スタブ 5 種とインターフェース | 未着手 | 高 |
 | M3: handler 4 種（enqueue / consumer / data-sync / notify-slack） | 未着手 | 高 |
 | M4: `docker-compose.yml`（LocalStack、タグ固定） | 未着手 | 高 |
@@ -49,6 +48,7 @@
 | スタック別ルールの追加 | #3 / #4 |
 | 仕様書（02〜08・10・11） | #5 |
 | 開発基盤（npm・tsconfig・ESLint + Prettier・Vitest・CI） | #7 |
+| 入力スキーマ（Zod）とエラークラス | #9 |
 
 ## 将来課題・ブロッカー
 

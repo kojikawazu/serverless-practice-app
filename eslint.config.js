@@ -40,6 +40,12 @@ export default defineConfig(
       "@typescript-eslint/await-thenable": "error",
       // 型だけの import は import type に分ける（verbatimModuleSyntax と揃える）
       "@typescript-eslint/consistent-type-imports": "error",
+      // `const { a: _a, ...rest } = obj` でキーを取り除く書き方では、取り除いた側は使わないのが意図どおり。
+      // rest を使っている限り未使用として報告しない（それ以外の未使用変数は引き続き検出する）
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { ignoreRestSiblings: true },
+      ],
     },
   },
   {
@@ -68,7 +74,10 @@ export default defineConfig(
             "ExportNamedDeclaration > ClassDeclaration > ClassBody > MethodDefinition[accessibility!='private'][kind!='constructor']",
             "ExportNamedDeclaration > TSTypeAliasDeclaration",
             "ExportNamedDeclaration > TSInterfaceDeclaration",
-            "ExportNamedDeclaration > VariableDeclaration",
+            // JSDoc は export 文の前に付くため、export 文そのものを対象にする。
+            // "ExportNamedDeclaration > VariableDeclaration" と書くと子の宣言からは JSDoc が見えず、
+            // JSDoc を付けた export const まで「欠落」と報告される
+            "ExportNamedDeclaration:has(> VariableDeclaration)",
           ],
         },
       ],
