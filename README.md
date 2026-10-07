@@ -10,11 +10,26 @@
 
 ## セットアップ
 
-<!-- 記入: 前提ツール・依存関係のインストール・環境変数の設定手順を記載する -->
+Node.js 22 以上が必要です（バージョンは [`.nvmrc`](.nvmrc)）。LocalStack・Terraform などインフラ側の前提ツールは [09 アーキテクチャ仕様書](docs/09-architecture-specification.md#前提ツール) を参照してください。
+
+```bash
+npm ci
+```
+
+TypeScript は 6.0 系に固定しています（`typescript-eslint` の対応範囲が `<6.1.0` のため）。更新するときは `typescript-eslint` の peer 依存を確かめてください。
 
 ## 使い方
 
-<!-- 記入: ローカル起動・テスト・デプロイのコマンドを記載する -->
+コードの検査とテストは次のコマンドで実行します。CI（`.github/workflows/ci.yml`）も同じ npm スクリプトを呼びます。
+
+```bash
+npm run typecheck     # 型検査（tsc --noEmit）
+npm run lint          # ESLint（警告も失敗扱い）
+npm run format:check  # Prettier の整形チェック（npm run format で整形）
+npm test              # Vitest + カバレッジ（functions/src の行カバレッジ 80% 未満で失敗）
+```
+
+デプロイ・実行のコマンドは、インフラの実装時に追記します。
 
 ドキュメントとシェルスクリプトの検査は次のコマンドで実行します。
 

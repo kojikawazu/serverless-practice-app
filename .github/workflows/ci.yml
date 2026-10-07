@@ -1,0 +1,60 @@
+# TypeScript の型検査・Lint・整形チェック・テスト。
+# コマンドの正本は package.json の scripts。CI もローカルも同じ npm スクリプトを呼ぶ。
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ドキュメント・ルールだけの変更では重いジョブを動かさない（.claude/rules/github-actions.md）。
+  # 必須チェックにしても pending で詰まらないよう、ワークフローは常に起動してジョブ側でスキップする。
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # pull_request では変更ファイルを API から取得するため
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v7 # push では git の差分を使うため
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          # 除外リストを AND で結ぶ。既定の 'some' では NOT A OR NOT B になり、ほぼ全ファイルが true になる。
+          # この filter に肯定パターンを混ぜない（AND になって常に false になる）。
+          predicate-quantifier: "every"
+          filters: |
+            app:
+              - '!docs/**'
+              - '!**/*.md'
+              - '!.claude/**'
+
+  check:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Format
+        run: npm run format:check
+      - name: Test
+        run: npm test

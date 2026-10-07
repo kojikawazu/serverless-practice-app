@@ -42,7 +42,8 @@
 │   ├── terraform/        # 土台（IAM・SQS・S3・Schedule group・SSM 出力）
 │   │   └── envs/         # local.tfvars / dev.tfvars（秘匿値は置かない）
 │   └── cdk/              # アプリ（Lambda・Step Functions・Schedule・EventBridge rule）
-└── scripts/              # 検査・デプロイ補助スクリプト
+├── scripts/              # 検査・デプロイ補助スクリプト
+└── test/                 # リポジトリ全体の設定に対するテスト（Lint 設定の回帰テスト等）
 ```
 
 元資料では Terraform と CDK が別リポジトリだが、デモでは 1 リポジトリ内の 2 ディレクトリで代替する。「変更が 2 か所にまたがる」構造はそのまま残る。
