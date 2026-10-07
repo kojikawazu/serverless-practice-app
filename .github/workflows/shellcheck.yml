@@ -1,0 +1,37 @@
+# シェルスクリプトの検査（shell レーン）。既存の CI とは発火条件も実行内容も
+# 別物のため独立させる。
+#
+# actionlint はワークフローの run: の中身しか shellcheck に渡さないため、
+# 独立した .sh ファイルは actionlint レーンでは検査されない。本レーンがそれを埋める。
+name: shellcheck
+
+# パスフィルタはかけない。実行が数秒で終わる一方、必須チェックにした際に
+# パスフィルタの設計を誤ると PR がマージ不能になるため（起動しないワークフローの
+# 必須チェックは pending のまま完了しない）。常時起動ならその余地が無い。
+# actionlint / markdownlint のワークフローも同じ理由で常時実行する。
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      # 検査対象を git ls-files から引くため、checkout を先に置く
+      - uses: actions/checkout@v7
+
+      # 検査コマンドとバージョンは scripts/ の 1 箇所に定義し、CI もローカルもそれを実行する
+      # （手順を CI とローカルに書き分けると、必ずどちらかが腐る）。
+      # ランナーにプリインストールされた shellcheck はバージョンが固定できないため、
+      # スクリプト側が固定タグの Docker イメージへ倒す。
+      - name: Lint shell scripts
+        run: ./scripts/lint-shell.sh

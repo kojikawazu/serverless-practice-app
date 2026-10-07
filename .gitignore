@@ -1,0 +1,35 @@
+# 環境変数・秘匿情報（テンプレートは管理する）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node.js / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# AWS CDK
+cdk.out/
+cdk.context.json
+
+# Terraform（tfvars は環境ごとの値・秘匿値を含みうるため example のみ管理）
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+*.tfplan
+.terraform.tfstate.lock.info
+
+# LocalStack
+.localstack/
+volume/
+
+# OS / エディタ
+.DS_Store
+.idea/
+.vscode/
