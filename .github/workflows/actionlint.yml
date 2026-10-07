@@ -1,0 +1,34 @@
+# GitHub Actions ワークフロー自体の静的解析（actionlint）
+# ルールの正本: .claude/rules/github-actions.md の「ワークフローの静的解析（actionlint）」
+name: actionlint
+
+# パスフィルタはかけない。実行が数秒で終わる一方、必須チェックにした際に
+# パスフィルタの設計を誤ると PR がマージ不能になる（リスクが削減幅に見合わない）。
+# 常時起動ならワークフロー自体が必ず走るので、pending で詰まらない。
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      # actionlint は Git リポジトリの中で .github/workflows を探すため、checkout を先に置く
+      - uses: actions/checkout@v7
+
+      # 公式イメージには actionlint 本体に加えて shellcheck / pyflakes が同梱されており、
+      # run: の中身まで検査される。ローカル実行と「同じコマンド・同じバージョン」になる。
+      # タグを固定する（latest にすると、コードを変えていないのに新リリースで CI が落ちる）。
+      - name: Run actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: docker run --rm -v "$PWD":/repo -w /repo "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
