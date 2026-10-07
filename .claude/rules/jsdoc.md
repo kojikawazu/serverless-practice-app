@@ -209,7 +209,7 @@ TypeScript プロジェクトでは型ブレース系ルールを無効化する
         "ExportNamedDeclaration > ClassDeclaration > ClassBody > MethodDefinition[accessibility!='private'][kind!='constructor']",
         "ExportNamedDeclaration > TSTypeAliasDeclaration",
         "ExportNamedDeclaration > TSInterfaceDeclaration",
-        "ExportNamedDeclaration > VariableDeclaration"
+        "ExportNamedDeclaration:has(> VariableDeclaration)"
       ]
     }],
     "jsdoc/no-blank-blocks": "error",
@@ -219,6 +219,7 @@ TypeScript プロジェクトでは型ブレース系ルールを無効化する
 }
 ```
 
+- **`export const` は export 文そのもの（`ExportNamedDeclaration:has(> VariableDeclaration)`）を対象にする。** JSDoc は `export` 文の前に付くため、`ExportNamedDeclaration > VariableDeclaration` と子の宣言を指すと JSDoc が見えず、**JSDoc を付けた `export const` まで欠落と報告される**（ESLint + `eslint-plugin-jsdoc` 65 で確認）。関数・クラス・型は子を指しても JSDoc を見つけられるため、この差は構文ごとの fixture でしか気づけない（次節）。
 - **`enableFixer: false` を必ず指定し、`no-blank-blocks` を `error` にする。** `require-jsdoc` は既定で自動修正が有効で、`--fix` が空の `/** */` を挿入して**欠落の検出を黙らせる**。
 - **ルールは `error` か `off` のどちらかにする。** `warn` で段階導入しない（警告は放置されて検出装置として働かなくなる）。
 - **型のメンバー（`TSPropertySignature`）は Lint で強制しない（`off`）。** 「自明なプロパティは省略してよい・書くことがない項目に埋め草コメントを付けない」方針と両立せず、`error` にすると埋め草を強いる。メンバーのコメントはレビューで見る。
@@ -229,17 +230,33 @@ TypeScript プロジェクトでは型ブレース系ルールを無効化する
 oxlint の `jsPlugins` は互換層（alpha）であり、**バージョンの更新で検出結果が黙って変わり得る**（上記の `publicOnly` の取りこぼしもエラーにならない）。**検出されるべき行に印を付けた fixture を用意し、検出結果と印の行が一致することを CI で確かめる。**
 
 ```ts
-// fixture: 検出されるべき行に expect-jsdoc の印を付ける
-export function exportedFn(a: string): string { // expect-jsdoc
+// fixture: 検出されるべき宣言の直前の行に expect-jsdoc の印を置く。印の無い宣言は検出されてはならない
+// expect-jsdoc
+export function exportedFn(a: string): string {
   return a;
 }
-function internalFn(): void {}               // 印なし = 検出されてはならない
-export class TaskService {                   // expect-jsdoc
-  findAll(): string[] { return []; }         // expect-jsdoc
+
+function internalFn(): void {}
+
+// expect-jsdoc
+export const EXPORTED_CONST = 1;
+
+/** JSDoc 付き。検出されてはならない */
+export const DOCUMENTED_CONST = 1;
+
+// expect-jsdoc
+export class TaskService {
+  // expect-jsdoc
+  findAll(): string[] {
+    return [];
+  }
+
   private helper(): void {}
 }
 ```
 
 - 印の行の集合と、Linter が報告した行の集合を比較し、**過不足があれば落とす**（検出漏れだけでなく、余計な検出も落とす）。
 - fixture には、検出されるべきもの（export の関数・クラス・公開メソッド・型・定数）と、されてはならないもの（非 export・`private`・`constructor`）を**両方**入れる。片方だけでは、全部を検出する設定や何も検出しない設定を見逃す。
+- **「両方」は対象の構文ごとに揃える。** 関数・クラス・公開メソッド・型・interface・定数のそれぞれに、「JSDoc 無し（検出される）」と「JSDoc 付き（検出されない）」を置く。全体で両方そろっていても、ある構文に JSDoc 付きのケースが無ければ、その構文だけ常に報告するセレクタを見逃す（上記 `export const` の誤りはこれで見逃された）。
+- **印は宣言の直前の行に置く。** 宣言と同じ行の末尾に置くと、Formatter（Prettier）が `{ // 印` をブロック内へ移し、印と報告行がずれる。
 - fixture は通常の Lint の対象から外し、この検査からだけ読む（fixture のために本番の Lint を落とさない）。
