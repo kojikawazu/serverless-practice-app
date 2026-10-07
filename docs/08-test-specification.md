@@ -61,14 +61,17 @@
 - `functions/src/` の行カバレッジ 80% 以上を CI で強制する（下回ったら落とす）
 - 数値より、上記の準正常系・異常系（失敗の注入・検証エラー・部分失敗）が全 handler で通っていることを重視する
 - `infra/` はカバレッジの対象外。CDK は #18・#19 のような「ずれると壊れる設定」をテストで固定する
+- `functions/src/` が空の間（M2 時点）は対象が 0 件のため、閾値は何も検査していない。M3 で最初の実装を入れたときに、テストの無いコードで閾値割れが起きることを確かめる
+
+Lint 設定そのものも検査の対象にする。`test/lint/jsdoc.test.ts` は、JSDoc 必須ルールの検出結果を fixture の印と突き合わせ、プラグインやセレクタの更新で検出が黙って変わったら落とす（`jsdoc.md`「検出結果を回帰テストに固定する」）。
 
 ## テストツール・実行方法
 
-コマンドの正本は実装時に `package.json` の scripts に置く。
+コマンドの正本は `package.json` の scripts。手元と CI（`.github/workflows/ci.yml`）が同じスクリプトを呼ぶ。
 
 | 対象 | 実行 | CI |
 |---|---|---|
-| UT（handler・スキーマ・CDK）と型検査 | `npm test` / `npm run typecheck` | PR で毎回実行する（必須チェック） |
+| UT（handler・スキーマ・CDK）と型検査・Lint・整形 | `npm test` / `npm run typecheck` / `npm run lint` / `npm run format:check` | PR で毎回実行する。ドキュメント・ルールだけの変更ではスキップする |
 | IT | LocalStack を起動して `npm run test:it` | 当面は手元のみ。LocalStack の起動時間と安定性を見て、CI へ載せるかを決める |
 | 手動確認 | 03「操作方針」の手順 | 対象外 |
 

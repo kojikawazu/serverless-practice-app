@@ -1,0 +1,22 @@
+{
+  // 型検査専用（tsc --noEmit）。Lambda は esbuild（CDK の NodejsFunction）がバンドルするため、
+  // tsc は出力しない。モジュール解決はバンドラ前提の "bundler" に揃える。
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "noEmit": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["functions", "infra/cdk", "test", "*.config.ts"]
+}

@@ -1,0 +1,9 @@
+# Markdown は markdownlint の担当（.claude/rules/static-analysis.md「Formatter と役割を重ねない」）。
+# Prettier と両方で整形すると、直しても直らない指摘が出る。
+*.md
+
+# 生成物・依存
+package-lock.json
+coverage/
+cdk.out/
+dist/
