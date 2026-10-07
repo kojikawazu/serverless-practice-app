@@ -113,6 +113,7 @@ flowchart LR
     GRP -.- SCH
     SCH --> SFN
     SFN --> ENQ --> Q --> CON --> SG
+    ENQ -. 配信対象の取得 .-> EXT
     Q -. 3 回失敗 .-> DLQ
     SFN --> SYNC
     SYNC --> S3
