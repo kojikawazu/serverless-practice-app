@@ -15,13 +15,12 @@ coverage/
 cdk.out/
 cdk.context.json
 
-# Terraform（tfvars は環境ごとの値・秘匿値を含みうるため example のみ管理）
+# Terraform（envs/*.tfvars は秘匿値を置かない前提で管理する。秘匿値は *.secret.tfvars に分ける）
 .terraform/
 *.tfstate
 *.tfstate.*
 crash.log
-*.tfvars
-!*.tfvars.example
+*.secret.tfvars
 *.tfplan
 .terraform.tfstate.lock.info
 

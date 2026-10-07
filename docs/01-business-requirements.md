@@ -44,7 +44,7 @@
 
 - 外部サービス（SendGrid / BigQuery / Cuenote FC / MySQL / Slack）は**すべてスタブ**にする。実在の宛先へは何も送らない
 - 同じ IaC を **LocalStack（ローカル検証）と実 AWS アカウント（動作確認）の両方**へデプロイできるようにする
-- 実 AWS では常時課金されるリソースを避ける（例: NAT Gateway）。費用の扱いは 09 で決める
+- 実 AWS では常時課金されるリソースを作らない（NAT Gateway 等）。詳細は 09「費用」を参照
 - 技術スタックの詳細は [09 アーキテクチャ仕様書](09-architecture-specification.md) を参照
 
 ## 主要な決定事項
