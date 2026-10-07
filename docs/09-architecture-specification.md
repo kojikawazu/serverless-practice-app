@@ -169,7 +169,21 @@ Terraform → CDK の順にデプロイし、削除はその逆（CDK → Terraf
 | `local` | LocalStack | 手元から `tflocal` / `cdklocal` |
 | `dev` | 実 AWS（検証用アカウント） | 手元から `terraform` / `cdk`（AWS プロファイルで認証） |
 
-CI からのデプロイは行わない（デモのため手動で十分）。Terraform の state はローカルに置き、ステージごとに workspace を分ける。
+CI からのデプロイは行わない（デモのため手動で十分）。
+
+### Terraform の state
+
+backend は `s3` の 1 種類に統一し、置き場所をステージで分ける。運用ルールの正本は [`.claude/rules/iac.md`](../.claude/rules/iac.md)。
+
+| ステージ | state の置き場所 | 理由 |
+|---|---|---|
+| `dev` | 実 AWS の共有バケット `kojikawazu-tfstate`、キー `serverless-practice-app/dev/terraform.tfstate` | 手元の state を失うと実 AWS のリソースを見失うため |
+| `local` | LocalStack 内の S3（`tflocal` が backend の向き先を LocalStack へ差し替える） | LocalStack の再起動でリソースごと消えるため、state も同じ寿命の使い捨てでよい |
+
+- state バケットは Terraform で管理しない（自分の state を置くバケットを自分で作れないため）。冪等なスクリプトで作成し、バージョニング有効・公開アクセス禁止にする。スクリプトは実装時に `scripts/` へ置く
+- ロックは S3 のネイティブロック（`use_lockfile = true`）を使い、DynamoDB テーブルは作らない
+- `envs/*.tfvars` は秘匿値を置かない前提でコミットする。秘匿値が必要になったら `*.secret.tfvars`（Git 管理外）に分ける
+- `tflocal` による backend の差し替えは実装時に動作を確認する
 
 ### 費用
 
@@ -192,4 +206,3 @@ CI からのデプロイは行わない（デモのため手動で十分）。Te
 
 - VPC / Security Group / NAT Gateway（実在の外部 SaaS へ接続する場合に必要）
 - 元資料「改善提案の候補」: DLQ アラーム、決定的な `MessageDeduplicationId`、Consumer の冪等化、`waitForTaskToken`
-- Terraform の state のリモート管理（S3 バックエンド）
