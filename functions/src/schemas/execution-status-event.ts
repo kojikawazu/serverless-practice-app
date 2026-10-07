@@ -12,6 +12,9 @@ export const notifiedStatusSchema = z.enum([
   "ABORTED",
 ]);
 
+/** Slack 通知の対象にする実行状態 */
+export type NotifiedStatus = z.infer<typeof notifiedStatusSchema>;
+
 /**
  * Step Functions の状態変化イベント（EventBridge → Slack 通知 Lambda）。
  * EventBridge のエンベロープは他にも多くのフィールドを持つため、未知のキーは拒否せず取り除く。
