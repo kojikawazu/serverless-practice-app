@@ -1,0 +1,2 @@
+# local ステージの state のキー。バケットは tflocal が LocalStack 内に作る
+key = "serverless-practice-app/local/terraform.tfstate"

@@ -41,6 +41,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 - ロググループは CDK が作るため、`logs:CreateLogGroup` は付けない
 - EventBridge rule から Slack 通知 Lambda への呼び出しは、関数側のリソースベースポリシーで許可する（CDK がターゲット設定時に付ける。ロールの変更ではない）
 - `*` のアクション・`*` のリソースは使わない
+- **`local` では権限の過不足を確かめられない**: LocalStack は既定で IAM のポリシーを評価しないため、権限が足りなくても動く。最小権限で動くことは `dev` で確かめる（#23）
 
 ## 入力バリデーション
 

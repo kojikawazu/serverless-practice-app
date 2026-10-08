@@ -32,3 +32,6 @@ volume/
 .DS_Store
 .idea/
 .vscode/
+
+# tflocal が書き出す、接続先を LocalStack に向ける上書きファイル（実行のたびに作られる）
+localstack_providers_override.tf

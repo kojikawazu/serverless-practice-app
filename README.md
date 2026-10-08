@@ -37,13 +37,22 @@ npm run format:check  # Prettier の整形チェック（npm run format で整�
 npm test              # Vitest + カバレッジ（functions/src の行カバレッジ 80% 未満で失敗）
 ```
 
-デプロイ・実行のコマンドは、インフラの実装時に追記します。
+土台（Terraform）は次のスクリプトで操作します。`local` は LocalStack（`tflocal`）、`dev` は実 AWS（`terraform`）を対象にします。
 
-ドキュメントとシェルスクリプトの検査は次のコマンドで実行します。
+```bash
+./scripts/terraform.sh local init     # state の置き場所を設定する
+./scripts/terraform.sh local apply    # 土台を作る（IAM・SQS・S3・Schedule group・SSM）
+./scripts/terraform.sh local destroy  # 土台を消す（CDK を先に消す）
+```
+
+アプリ（CDK）のデプロイと実行のコマンドは、実装時に追記します。
+
+ドキュメント・シェルスクリプト・Terraform の検査は次のコマンドで実行します。
 
 ```bash
 ./scripts/lint-docs.sh
 ./scripts/lint-shell.sh
+./scripts/lint-terraform.sh   # Terraform の整形・構文（CI も同じものを実行）
 ./scripts/check-secret-files.sh
 ```
 
