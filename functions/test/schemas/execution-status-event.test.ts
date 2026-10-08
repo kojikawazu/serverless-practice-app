@@ -30,7 +30,7 @@ const FAILED_EVENT = {
 
 describe("executionStatusEventSchema（状態変化イベント）", () => {
   describe("正常系", () => {
-    it("FAILED のイベントから通知に使う項目を取り出し、エンベロープの他の項目は取り除く", () => {
+    it("FAILED のイベントから通知に使う項目を取り出し、それ以外の項目は取り除く", () => {
       const parsed = executionStatusEventSchema.parse(FAILED_EVENT);
 
       expect(parsed).toEqual({
@@ -38,11 +38,8 @@ describe("executionStatusEventSchema（状態変化イベント）", () => {
         "detail-type": "Step Functions Execution Status Change",
         detail: {
           executionArn: FAILED_EVENT.detail.executionArn,
-          stateMachineArn: FAILED_EVENT.detail.stateMachineArn,
           name: "run-1",
           status: "FAILED",
-          startDate: 1_791_417_600_000,
-          stopDate: 1_791_417_605_000,
           error: "InjectedFailureError",
           cause: "failAt=dataSync の指定により失敗を注入しました",
         },
@@ -105,6 +102,32 @@ describe("executionStatusEventSchema（状態変化イベント）", () => {
 
       expect(executionStatusEventSchema.safeParse(event).success).toBe(false);
     });
+
+    // LocalStack は日時を ISO 8601 の文字列で届ける（#30）。通知に使わない項目の形で通知を捨てない
+    it("startDate / stopDate が文字列でも受理する", () => {
+      const event = {
+        ...FAILED_EVENT,
+        detail: {
+          ...FAILED_EVENT.detail,
+          startDate: "2026-10-08T00:00:00.000Z",
+          stopDate: "2026-10-08T00:00:05.000Z",
+        },
+      };
+
+      expect(executionStatusEventSchema.parse(event).detail).toMatchObject({
+        name: "run-1",
+        status: "FAILED",
+      });
+    });
+
+    it("stateMachineArn が無くても受理する（通知に使わない）", () => {
+      const { stateMachineArn: _arn, ...detail } = FAILED_EVENT.detail;
+
+      expect(
+        executionStatusEventSchema.safeParse({ ...FAILED_EVENT, detail })
+          .success,
+      ).toBe(true);
+    });
   });
 
   describe("異常系", () => {
@@ -116,13 +139,16 @@ describe("executionStatusEventSchema（状態変化イベント）", () => {
       );
     });
 
-    it("startDate が文字列のイベントを拒否する", () => {
-      const event = {
-        ...FAILED_EVENT,
-        detail: { ...FAILED_EVENT.detail, startDate: "2026-10-08" },
-      };
+    it.each(["name", "executionArn", "status"] as const)(
+      "通知に使う %s が無いイベントを拒否する",
+      (key) => {
+        const { [key]: _removed, ...detail } = FAILED_EVENT.detail;
 
-      expect(executionStatusEventSchema.safeParse(event).success).toBe(false);
-    });
+        expect(
+          executionStatusEventSchema.safeParse({ ...FAILED_EVENT, detail })
+            .success,
+        ).toBe(false);
+      },
+    );
   });
 });
