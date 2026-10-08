@@ -47,11 +47,14 @@
 { "executionName": "manual-20261008-001", "failAt": "dataSync" }
 ```
 
-ASL では `Payload` を次のように組む。`failAt` が実行入力に無いと `States.Runtime` で落ちるため、ステートマシンの先頭で既定値を補う（実装時に方式を決める）。
+ステートマシンは JSONata で書き、`Payload` を「実行入力に実行名を足したもの」として組む。
 
-```json
-{ "executionName.$": "$$.Execution.Name", "failAt.$": "$.failAt" }
+```text
+{% $merge([$states.input, {"executionName": $states.context.Execution.Name}]) %}
 ```
+
+- 実行入力に `failAt` が無ければ、タスク入力にも無いまま渡る。JSONPath の `"failAt.$": "$.failAt"` のように、項目が無いだけで `States.Runtime` で落ちることがない
+- 実行入力に未知のキー（`failat` などの綴り違い）があれば、そのままタスク入力に入り、タスク入力のスキーマ（未知のキーを拒否）で `ValidationError` になる
 
 ### 投入 Lambda の出力
 
@@ -65,7 +68,7 @@ ASL では `Payload` を次のように組む。`failAt` が実行入力に無�
 { "exported": 3, "s3Key": "exports/2026-10-08/manual-20261008-001.json" }
 ```
 
-ステートマシンはタスクの出力を次のステートの入力に流さない（`ResultPath` で実行入力を保つ）。`DataSync` が実行入力の `failAt` を読めるようにするため。
+ステートマシンはタスクの出力を次のステートの入力に流さない（各タスクの `Output` を `{% $states.input %}` にして実行入力を保つ）。`DataSync` が実行入力の `failAt` を読めるようにするため。
 
 ### SQS メッセージ本文
 

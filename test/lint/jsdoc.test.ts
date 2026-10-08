@@ -32,8 +32,18 @@ function markedLines(source: string): number[] {
  * @returns 報告された行番号の昇順リスト
  */
 async function reportedLines(): Promise<number[]> {
-  // fixture は通常の Lint から ignores で外しているため、ignore: false で明示的に検査する
-  const eslint = new ESLint({ ignore: false });
+  // fixture は通常の Lint から ignores で外しているため、ignore: false で明示的に検査する。
+  // ルールの設定（セレクタ・オプション）はリポジトリの eslint.config.js をそのまま使い、次の 2 点だけ変える:
+  // - 動かすルールを JSDoc 必須ルールに絞る（ruleFilter）
+  // - 型情報の読み込み（projectService）を切る。JSDoc のルールは型を使わない一方、型情報を読むと
+  //   tsconfig の対象全体（aws-cdk-lib の型定義を含む）でプログラムを組み立てるため、CI で 30 秒を超えた
+  const eslint = new ESLint({
+    ignore: false,
+    ruleFilter: ({ ruleId }) => ruleId === RULE,
+    overrideConfig: {
+      languageOptions: { parserOptions: { projectService: false } },
+    },
+  });
   const [result] = await eslint.lintFiles([FIXTURE]);
   if (result === undefined) {
     throw new Error(`ESLint が fixture を検査しなかった: ${FIXTURE}`);

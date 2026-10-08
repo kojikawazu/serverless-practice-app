@@ -30,7 +30,6 @@
 |--------|------|--------|
 | M2: Dependabot の設定（npm・GitHub Actions） | 未着手 | 中 |
 | M4: state バケットを作る冪等スクリプト（`dev` 用） | 未着手 | 中 |
-| M5: CDK スタック（Lambda・ステートマシン・Schedule・EventBridge rule）と CDK の UT | 未着手 | 高 |
 | M5: LocalStack 向けのデプロイ・実行スクリプトと IT | 未着手 | 高 |
 | M5: LocalStack で要検証の 2 点を確かめ、結果を 09 に反映 | 未着手 | 中 |
 | M6: `dev` へのデプロイ・手動確認・削除 | 未着手 | 中 |
@@ -50,9 +49,11 @@
 | handler（データ連携 / Slack 通知）・Lambda の入口の共通化 | #15 |
 | LocalStack の起動定義（Hobby プラン・認証トークン） | #17 |
 | Terraform の土台と SSM 出力・Terraform の静的検査 | #18 |
+| CDK スタック（Lambda・ステートマシン・Schedule・EventBridge rule）と CDK の UT | #20 |
 
 ## 将来課題・ブロッカー
 
 - 元資料「改善提案の候補」（DLQ アラーム・Consumer の冪等化・`waitForTaskToken`）は将来構成（09「将来構成」）
 - IT を CI に載せるかは M5 の結果で判断する（08「テストツール・実行方法」）
-- SSM の値を CDK がいつ読むか（デプロイ時 / 合成時）は M5 で決める（05「SSM パラメータ」）
+- `aws-cdk-lib` が同梱する `brace-expansion` に高（high）の脆弱性（DoS）がある。開発時だけ使い、入力は自分のコードのグロブに限られるため実害は小さい。同梱のため外から更新できず、`aws-cdk-lib` の更新を待つ（Dependabot #16 で追う）
+- Slack 通知 Lambda が、LocalStack の状態変化イベント（日時が文字列）を「対象外」として捨てる不具合（#30）
