@@ -2,7 +2,7 @@ import { SQSClient, SendMessageBatchCommand } from "@aws-sdk/client-sqs";
 import type { SendMessageBatchRequestEntry } from "@aws-sdk/client-sqs";
 import { EnqueuePartialFailureError } from "../errors/enqueue-partial-failure-error";
 import { InjectedFailureError } from "../errors/injected-failure-error";
-import { createLogger } from "../lib/logger";
+import { loadHandlerContext } from "../lib/handler-context";
 import { parseInput } from "../lib/parse";
 import { enqueueEnvSchema } from "../schemas/env";
 import { taskInputSchema } from "../schemas/execution";
@@ -152,11 +152,11 @@ const sqs = new SQSClient({});
  * @throws {EnqueuePartialFailureError} `SendMessageBatch` の一部が失敗した場合
  */
 export async function handler(event: unknown): Promise<EnqueueResult> {
-  const env = parseInput(enqueueEnvSchema, process.env, "環境変数");
+  const { env, logger } = loadHandlerContext("enqueue", enqueueEnvSchema);
   return await enqueue(event, {
     sqs,
     queueUrl: env.QUEUE_URL,
     recipients: new MySqlStub(),
-    logger: createLogger({ function: "enqueue", stage: env.STAGE }),
+    logger,
   });
 }

@@ -1,6 +1,6 @@
 import type { SQSBatchResponse } from "aws-lambda";
 import { InjectedFailureError } from "../errors/injected-failure-error";
-import { createLogger } from "../lib/logger";
+import { loadHandlerContext } from "../lib/handler-context";
 import { parseInput } from "../lib/parse";
 import { baseEnvSchema } from "../schemas/env";
 import { mailMessageSchema } from "../schemas/mail-message";
@@ -106,7 +106,6 @@ export async function consume(
  * @throws {ValidationError} 環境変数またはイベントの形式が不正な場合
  */
 export async function handler(event: unknown): Promise<SQSBatchResponse> {
-  const env = parseInput(baseEnvSchema, process.env, "環境変数");
-  const logger = createLogger({ function: "consumer", stage: env.STAGE });
+  const { logger } = loadHandlerContext("consumer", baseEnvSchema);
   return await consume(event, { mailSender: new SendGridStub(logger), logger });
 }
