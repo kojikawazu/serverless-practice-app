@@ -29,7 +29,6 @@
 | タスク | 状態 | 優先度 |
 |--------|------|--------|
 | M2: Dependabot の設定（npm・GitHub Actions） | 未着手 | 中 |
-| M4: Terraform の土台と SSM 出力、`local` / `dev` の tfvars | 未着手 | 高 |
 | M4: state バケットを作る冪等スクリプト（`dev` 用） | 未着手 | 中 |
 | M5: CDK スタック（Lambda・ステートマシン・Schedule・EventBridge rule）と CDK の UT | 未着手 | 高 |
 | M5: LocalStack 向けのデプロイ・実行スクリプトと IT | 未着手 | 高 |
@@ -50,6 +49,7 @@
 | handler（投入 / Consumer） | #14 |
 | handler（データ連携 / Slack 通知）・Lambda の入口の共通化 | #15 |
 | LocalStack の起動定義（Hobby プラン・認証トークン） | #17 |
+| Terraform の土台と SSM 出力・Terraform の静的検査 | #18 |
 
 ## 将来課題・ブロッカー
 

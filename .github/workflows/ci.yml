@@ -1,5 +1,5 @@
-# TypeScript の型検査・Lint・整形チェック・テスト。
-# コマンドの正本は package.json の scripts。CI もローカルも同じ npm スクリプトを呼ぶ。
+# TypeScript の型検査・Lint・整形チェック・テストと、Terraform の整形・構文の検査。
+# コマンドの正本は package.json の scripts と scripts/lint-terraform.sh。CI もローカルも同じものを呼ぶ。
 name: ci
 
 on:
@@ -58,3 +58,18 @@ jobs:
         run: npm run format:check
       - name: Test
         run: npm test
+
+  terraform:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          # 手元と同じ版に固定する（infra/terraform/versions.tf の required_version は 1.14 系）
+          terraform_version: 1.14.3
+          # 既定の wrapper は出力を捕捉して加工するため、素の terraform として動かす
+          terraform_wrapper: false
+      - name: Lint Terraform
+        run: ./scripts/lint-terraform.sh

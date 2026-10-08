@@ -24,7 +24,7 @@
 | Terraform → CDK の受け渡し | SSM Parameter Store |
 | ローカル実行 | LocalStack（Docker）+ `tflocal` / `cdklocal` |
 | 実 AWS | 個人の検証用アカウント（ステージ名 `dev`） |
-| CI | GitHub Actions（markdownlint / shellcheck / 秘匿ファイル検出 / 型検査・テスト） |
+| CI | GitHub Actions（markdownlint / shellcheck / 秘匿ファイル検出 / 型検査・テスト / Terraform の整形・構文） |
 | パッケージ管理 | npm（リポジトリ直下に 1 つ） |
 
 ## 構成方針
@@ -44,7 +44,7 @@
 │   └── test/
 ├── infra/
 │   ├── terraform/        # 土台（IAM・SQS・S3・Schedule group・SSM 出力）
-│   │   └── envs/         # local.tfvars / dev.tfvars（秘匿値は置かない）
+│   │   └── envs/         # <stage>.tfvars（変数）/ <stage>.s3.tfbackend（state のキー）。秘匿値は置かない
 │   └── cdk/              # アプリ（Lambda・Step Functions・Schedule・EventBridge rule）
 ├── scripts/              # 検査・デプロイ補助スクリプト
 └── test/                 # リポジトリ全体の設定に対するテスト（Lint 設定の回帰テスト等）
@@ -68,7 +68,7 @@
 
 **名前の先決め**: IAM ポリシーは Terraform が先に作るため、CDK が後から作るリソースの ARN を知らない。関数名・ステートマシン名を `serverless-practice-app-<stage>-<name>` の命名規約で固定し、Terraform 側はこの接頭辞のワイルドカードで権限を付ける。
 
-**連動するパラメータ**: SQS の可視性タイムアウト（Terraform）と Consumer Lambda のタイムアウト（CDK）は連動する。片方を変えるときはもう片方も確認する。
+**連動するパラメータ**: SQS の可視性タイムアウト（Terraform）と Consumer Lambda のタイムアウト（CDK）は連動する。Consumer のタイムアウトの正本は Terraform に置き、SSM 経由で CDK に渡す（04「連動するパラメータ」）。
 
 ### 外部サービスのスタブ
 
@@ -166,7 +166,7 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 | Node.js 22 以上 | Lambda のビルド・CDK | 導入済み前提 |
 | Terraform 1.14 系 | 土台の構築 | 導入済み前提 |
 | AWS CLI v2 | 実行の起動・確認 | `brew install awscli` |
-| `tflocal` | Terraform を LocalStack へ向ける | `pipx install terraform-local` |
+| `tflocal` | Terraform を LocalStack へ向ける | `brew install pipx` → `PIPX_HOME=~/.local/pipx pipx install terraform-local`（`PIPX_HOME` を付けないと、macOS では空白を含むパスに入り起動できない） |
 | `cdklocal` / `cdk` | CDK を LocalStack へ向ける | npm の devDependencies で導入 |
 
 ### 手順（ステージ `local`）
@@ -174,7 +174,7 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 1. `.env.example` を `.env` にコピーし、`LOCALSTACK_AUTH_TOKEN` を入れる
 2. LocalStack を起動する（`./scripts/localstack.sh up`。使うサービスがすべて使える状態になるまで待つ）
 3. 依存を入れる（`npm ci`）
-4. 土台を作る（`infra/terraform` で `tflocal init` → `tflocal apply -var-file=envs/local.tfvars`）
+4. 土台を作る（`./scripts/terraform.sh local init` → `./scripts/terraform.sh local apply`）
 5. アプリを作る（`cdklocal bootstrap` → `cdklocal deploy -c stage=local`）
 6. Step Functions の実行を手動で起動し、各 Lambda のログを確認する
 
@@ -215,7 +215,8 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 - state バケットは Terraform で管理しない（自分の state を置くバケットを自分で作れないため）。冪等なスクリプトで作成し、バージョニング有効・公開アクセス禁止にする。スクリプトは実装時に `scripts/` へ置く
 - ロックは S3 のネイティブロック（`use_lockfile = true`）を使い、DynamoDB テーブルは作らない
 - `envs/*.tfvars` は秘匿値を置かない前提でコミットする。秘匿値が必要になったら `*.secret.tfvars`（Git 管理外）に分ける
-- `tflocal` による backend の差し替えは実装時に動作を確認する
+- backend の共通部分（バケット・リージョン・`use_lockfile`）は `infra/terraform/versions.tf`、ステージで変わる `key` は `envs/<stage>.s3.tfbackend` に置き、`init` で渡す（`scripts/terraform.sh`）
+- `tflocal` は backend の接続先を LocalStack に差し替え、state のバケットを LocalStack 内に自動で作る（2026-10-08 に確認。`serverless-practice-app/local/terraform.tfstate` に保存された）。差し替えのために作業ディレクトリへ書き出す `localstack_providers_override.tf` は Git 管理外にしている
 
 ### 費用
 

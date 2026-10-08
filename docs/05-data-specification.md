@@ -124,6 +124,7 @@ Terraform が書き、CDK が合成時に読む。名前は `/serverless-practic
 | `role/notify-slack/arn` | Slack 通知 Lambda の実行ロール ARN | Slack 通知 Lambda |
 | `role/state-machine/arn` | ステートマシンの実行ロール ARN | ステートマシン |
 | `role/scheduler/arn` | Scheduler の実行ロール ARN | Schedule 定義 |
+| `consumer/timeout-seconds` | Consumer Lambda のタイムアウト（秒）。正本は Terraform の `consumer_timeout_seconds` で、SQS の可視性タイムアウトはこの 6 倍（04「連動するパラメータ」） | Consumer Lambda のタイムアウト |
 
 #### インデックス・制約
 

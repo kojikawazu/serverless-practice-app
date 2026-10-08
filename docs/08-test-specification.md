@@ -16,7 +16,8 @@
 |----------|--------|------|
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
-| UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（タイムアウトの連動・`Retry` の対象・`mutable: false`・イベントパターン） |
+| UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン） |
+| 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる 2 点（Scheduler の定時起動・状態変化イベントによる通知） |
 
@@ -47,7 +48,7 @@
 | 15 | 通知: `FAILED` のイベントで、実行名・状態・エラー名を Slack スタブへ出す | UT | 正常系 |
 | 16 | 通知: `TIMED_OUT` で `error` / `cause` が `null` でも出力できる | UT | 準正常系 |
 | 17 | 通知: 対象外の `detail-type` では何も出さず、エラーも投げない | UT | 準正常系 |
-| 18 | CDK: SQS の可視性タイムアウトが Consumer のタイムアウトの 6 倍 | UT | 異常系（設定ずれの検出） |
+| 18 | CDK: Consumer のタイムアウトを SSM（`consumer/timeout-seconds`）から取り、値を直書きしていない | UT | 異常系（設定ずれの検出） |
 | 19 | CDK: Lambda タスクの `Retry` に `InjectedFailureError` / `ValidationError` が含まれない | UT | 異常系（設定ずれの検出） |
 | 20 | `failAt` なしの実行が `SUCCEEDED` になり、S3 にファイルができる | IT | 正常系 |
 | 21 | `failAt: "dataSync"` の実行が `FAILED` になり、Slack スタブのログが出る | IT | 準正常系 |
@@ -55,7 +56,7 @@
 | 23 | `dev` で Schedule が実行を起動し、`FAILED` で通知が出る | 手動 | 正常系 |
 | 24 | Consumer: 失敗したメッセージと同じグループの後続は送らずに失敗として返し、別グループは送る | UT | 準正常系 |
 
-#18 は SQS が Terraform 側にあるため、CDK のテストからは Terraform の値を直接見られない。Terraform の変数ファイルから可視性タイムアウトを読み、CDK 側の Consumer のタイムアウトと比べる方式を実装時に決める。
+#18 は、可視性タイムアウトと Consumer のタイムアウトのずれを「検査で見つける」のではなく「ずれない構造にする」方針（04「連動するパラメータ」）に合わせ、CDK が値を自分で持たずに SSM から取っていることを固定する。Terraform 側の 6 倍の計算は `scripts/lint-terraform.sh` の検査対象のコードにあり、変数の検証（`validation`）で上限を守る。
 
 ## カバレッジ目標
 
