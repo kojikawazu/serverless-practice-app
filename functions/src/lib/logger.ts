@@ -64,6 +64,9 @@ export function createLogger(
     info: (message, extra = {}) => {
       sink(formatLine("INFO", message, { ...fields, ...extra }));
     },
+    warn: (message, extra = {}) => {
+      sink(formatLine("WARN", message, { ...fields, ...extra }));
+    },
     error: (message, error, extra = {}) => {
       sink(
         formatLine("ERROR", message, {
