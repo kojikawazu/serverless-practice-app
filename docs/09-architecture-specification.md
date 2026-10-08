@@ -138,7 +138,7 @@ flowchart LR
 
 ## 環境変数
 
-秘匿値は扱わない（外部サービスはすべてスタブのため）。Lambda の環境変数は CDK が SSM の値から設定する。
+Lambda の環境変数に秘匿値は無い（外部サービスはすべてスタブのため）。Lambda の環境変数は CDK が SSM の値から設定する。
 
 | 変数 | 用途 | 参照箇所 |
 |------|------|----------|
@@ -148,6 +148,12 @@ flowchart LR
 
 LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイントは、LocalStack が注入する設定に任せる。コード側でエンドポイントを分岐しない。
 
+手元（開発機）で使う環境変数は次の 1 つだけで、`.env`（Git 管理外）に置く。雛形は `.env.example`。
+
+| 変数 | 用途 | 参照箇所 |
+|------|------|----------|
+| `LOCALSTACK_AUTH_TOKEN` | LocalStack の起動に要る認証トークン（下記「LocalStack の認証」） | `docker-compose.yml` |
+
 ## ローカル開発セットアップ
 
 ### 前提ツール
@@ -155,6 +161,8 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 | ツール | 用途 | 導入 |
 |---|---|---|
 | Docker | LocalStack の実行 | 導入済み前提 |
+| LocalStack アカウント | 認証トークンの取得 | 無料の Hobby プランを作成（下記「LocalStack の認証」） |
+| Python 3 | 起動スクリプトのヘルスチェック判定 | macOS 標準 |
 | Node.js 22 以上 | Lambda のビルド・CDK | 導入済み前提 |
 | Terraform 1.14 系 | 土台の構築 | 導入済み前提 |
 | AWS CLI v2 | 実行の起動・確認 | `brew install awscli` |
@@ -163,13 +171,22 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 
 ### 手順（ステージ `local`）
 
-1. LocalStack を起動する（`docker compose up -d`）
-2. 依存を入れる（`npm ci`）
-3. 土台を作る（`infra/terraform` で `tflocal init` → `tflocal apply -var-file=envs/local.tfvars`）
-4. アプリを作る（`cdklocal bootstrap` → `cdklocal deploy -c stage=local`）
-5. Step Functions の実行を手動で起動し、各 Lambda のログを確認する
+1. `.env.example` を `.env` にコピーし、`LOCALSTACK_AUTH_TOKEN` を入れる
+2. LocalStack を起動する（`./scripts/localstack.sh up`。使うサービスがすべて使える状態になるまで待つ）
+3. 依存を入れる（`npm ci`）
+4. 土台を作る（`infra/terraform` で `tflocal init` → `tflocal apply -var-file=envs/local.tfvars`）
+5. アプリを作る（`cdklocal bootstrap` → `cdklocal deploy -c stage=local`）
+6. Step Functions の実行を手動で起動し、各 Lambda のログを確認する
 
-コマンドの正本は実装時に `scripts/` と README に置く。
+コマンドの正本は `scripts/` に置き、README からはスクリプトを呼ぶだけにする（4 以降は実装時に足す）。
+
+### LocalStack の認証
+
+2026-03-23 以降の LocalStack は、起動に LocalStack アカウントの認証トークンが要る（コミュニティ版のイメージは廃止された）。本デモは無料の **Hobby プラン**（非商用）を使う。使う 9 サービス（Lambda / SQS / S3 / Step Functions / EventBridge / EventBridge Scheduler / SSM / IAM / CloudWatch Logs）はすべて含まれる。
+
+- トークンの要らない最後の版（`4.14.0`、2026-02 で更新停止）に固定する案もあったが、保守されない版では本物の AWS との挙動のずれが広がるため採らなかった
+- トークンは秘匿値として扱う（06「データ保護」）
+- イメージのタグは `docker-compose.yml` を正本とする
 
 ## デプロイ
 

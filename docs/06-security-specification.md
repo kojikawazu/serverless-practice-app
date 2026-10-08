@@ -17,10 +17,10 @@
 | 主体 | 認証 |
 |---|---|
 | 開発者（`dev` へのデプロイ・実行） | AWS CLI のプロファイル（手元の認証情報）。CI からのデプロイはしない（09「ステージ」） |
-| 開発者（`local`） | LocalStack のダミー認証情報 |
+| 開発者（`local`） | AWS API にはダミー認証情報。LocalStack の起動には LocalStack アカウントの認証トークン（`LOCALSTACK_AUTH_TOKEN`。下記「データ保護」） |
 | AWS サービス間 | IAM ロール（下記） |
 
-外部サービスはすべてスタブのため、API キー等の秘匿値は扱わない。
+外部サービスはすべてスタブのため、外部サービスの API キーは扱わない。扱う秘匿値は LocalStack の認証トークンだけ。
 
 ## 認可（権限制御）
 
@@ -60,7 +60,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | 対象 | 方針 |
 |---|---|
 | 個人情報 | 扱わない。配信対象は `@example.com` の架空データのみ。ログに出してよい |
-| 秘匿値 | 持たない。持つことになったら `dev` は Secrets Manager、手元は Git 管理外のファイルに置く（`security.md`） |
+| 秘匿値 | `LOCALSTACK_AUTH_TOKEN` のみ。手元の `.env`（Git 管理外）に置き、変数名だけを `.env.example` で共有する。CI では使わない（IT は手元で実行するため。08）。ほかに持つことになったら `dev` は Secrets Manager、手元は `.env` に置く（`security.md`） |
 | S3 バケット | パブリックアクセスを全面ブロック。SSE-S3 で暗号化。バケットポリシーで HTTPS 以外のアクセスを拒否（`aws:SecureTransport`） |
 | SQS キュー・DLQ | SQS 管理の鍵で暗号化（SSE-SQS） |
 | Terraform の state | 09「Terraform の state」と `iac.md` に従う。秘匿値を含まないが、バケットはバージョニング有効・公開禁止 |

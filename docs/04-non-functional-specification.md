@@ -81,5 +81,5 @@
 |---|---|
 | リージョン | `ap-northeast-1`（`local` / `dev` 共通） |
 | Lambda ランタイム | Node.js 22.x（`arm64`） |
-| LocalStack | Docker イメージのタグを固定する（`latest` を使わない）。タグは実装時に決め、`docker-compose.yml` を正本にする |
+| LocalStack | Docker イメージのタグを固定する（`latest` を使わない）。`docker-compose.yml` を正本にする。起動には認証トークンが要る（09「LocalStack の認証」） |
 | 開発機 | macOS（Apple Silicon）を想定。前提ツールは 09「前提ツール」 |

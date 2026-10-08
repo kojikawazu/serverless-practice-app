@@ -16,6 +16,14 @@ Node.js 22 以上が必要です（バージョンは [`.nvmrc`](.nvmrc)）。Lo
 npm ci
 ```
 
+`local` ステージ（LocalStack）を使う場合は、LocalStack のアカウント（無料の Hobby プラン）を作り、認証トークンを `.env` に置いてから起動します。詳しくは [09「LocalStack の認証」](docs/09-architecture-specification.md#localstack-の認証) を参照してください。
+
+```bash
+cp .env.example .env          # LOCALSTACK_AUTH_TOKEN を書き入れる（.env は Git 管理外）
+./scripts/localstack.sh up    # 起動し、使うサービスがそろうまで待つ
+./scripts/localstack.sh down  # 停止する（LocalStack 内のリソースも消える）
+```
+
 TypeScript は 6.0 系に固定しています（`typescript-eslint` の対応範囲が `<6.1.0` のため）。更新するときは `typescript-eslint` の peer 依存を確かめてください。
 
 ## 使い方
