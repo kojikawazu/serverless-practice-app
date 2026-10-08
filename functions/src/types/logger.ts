@@ -16,6 +16,11 @@ export type Logger = {
   /** 情報ログを 1 行出力する。出力に失敗しても例外を投げない（ログで処理を止めない） */
   info: (message: string, fields?: LogFields) => void;
   /**
+   * エラーログを 1 行出力する。エラーの名前・メッセージ・スタックトレースを項目に含める（error-handling.md）。
+   * `Error` 以外の値が投げられた場合は、文字列にしてメッセージに入れる
+   */
+  error: (message: string, error: unknown, fields?: LogFields) => void;
+  /**
    * 共通の項目を足したロガーを返す。元のロガーは変わらない。
    * 同じキーは後から足したもの（子・呼び出し時の項目）が優先される
    */

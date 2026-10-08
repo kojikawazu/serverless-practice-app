@@ -53,6 +53,7 @@
 | 21 | `failAt: "dataSync"` の実行が `FAILED` になり、Slack スタブのログが出る | IT | 準正常系 |
 | 22 | `failAt: "consumer"` の実行後、DLQ に 3 件届く | IT | 準正常系 |
 | 23 | `dev` で Schedule が実行を起動し、`FAILED` で通知が出る | 手動 | 正常系 |
+| 24 | Consumer: 失敗したメッセージと同じグループの後続は送らずに失敗として返し、別グループは送る | UT | 準正常系 |
 
 #18 は SQS が Terraform 側にあるため、CDK のテストからは Terraform の値を直接見られない。Terraform の変数ファイルから可視性タイムアウトを読み、CDK 側の Consumer のタイムアウトと比べる方式を実装時に決める。
 
