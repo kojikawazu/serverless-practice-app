@@ -20,7 +20,7 @@
 | ビルド | esbuild（CDK の `NodejsFunction` 経由） |
 | テスト | Vitest |
 | IaC（土台） | Terraform 1.14 系 / AWS Provider |
-| IaC（アプリ） | AWS CDK v2（TypeScript） |
+| IaC（アプリ） | AWS CDK v2（TypeScript）。アプリは `tsx` で実行し、ステージは `-c stage=<ステージ名>`（`local` または `dev`）で渡す。機能フラグは推奨値を `cdk.json` に記録 |
 | Terraform → CDK の受け渡し | SSM Parameter Store |
 | ローカル実行 | LocalStack（Docker）+ `tflocal` / `cdklocal` |
 | 実 AWS | 個人の検証用アカウント（ステージ名 `dev`） |
@@ -45,7 +45,7 @@
 ├── infra/
 │   ├── terraform/        # 土台（IAM・SQS・S3・Schedule group・SSM 出力）
 │   │   └── envs/         # <stage>.tfvars（変数）/ <stage>.s3.tfbackend（state のキー）。秘匿値は置かない
-│   └── cdk/              # アプリ（Lambda・Step Functions・Schedule・EventBridge rule）
+│   └── cdk/              # アプリ（Lambda・Step Functions・Schedule・EventBridge rule）。bin/（入口）・lib/（スタック）・test/
 ├── scripts/              # 検査・デプロイ補助スクリプト
 └── test/                 # リポジトリ全体の設定に対するテスト（Lint 設定の回帰テスト等）
 ```

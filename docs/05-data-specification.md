@@ -129,7 +129,7 @@ Terraform が書き、CDK が合成時に読む。名前は `/serverless-practic
 #### インデックス・制約
 
 - 型はすべて `String`。秘匿値を置かないため `SecureString` は使わない
-- CDK が値を読むのはデプロイ時（`valueForStringParameter`）と合成時（`valueFromLookup`）のどちらにするか、実装時に LocalStack で動作を確かめてから決める。合成時に読む方式は `cdk.context.json` に値がキャッシュされるため、ステージごとの値が混ざらないかの確認が要る
+- CDK は値を**デプロイ時に**読む（`valueForStringParameter`。CloudFormation の SSM パラメータ型の参照になる）。合成時に読む方式（`valueFromLookup`）は値が `cdk.context.json` にキャッシュされ、ステージ間で混ざりうるため使わない。数値（`consumer/timeout-seconds`）も、LocalStack へのデプロイで Lambda のタイムアウトとして解決されることを確認した（#20）
 
 ## スキーマ定義
 

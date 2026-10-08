@@ -18,8 +18,8 @@
 
 | ステート | 種類 | 内容 |
 |---|---|---|
-| `Enqueue` | Lambda タスク | 投入 Lambda を呼ぶ。実行名（`$$.Execution.Name`）と実行入力の `failAt` を渡す |
-| `DataSync` | Lambda タスク | データ連携 Lambda を呼ぶ。実行名と `failAt` を渡す |
+| `Enqueue` | Lambda タスク | 投入 Lambda を呼ぶ。実行入力に実行名を足して渡す（07「タスク入力」） |
+| `DataSync` | Lambda タスク | データ連携 Lambda を呼ぶ。`Enqueue` と同じタスク入力を渡す |
 
 - 2 つのタスクを順に実行し、両方成功したら `SUCCEEDED` で終える。分岐・並列は持たない
 - 各タスクの `Retry` は一時的なエラー（04「リトライ」）だけを対象にする。注入した失敗・検証エラーはリトライしない

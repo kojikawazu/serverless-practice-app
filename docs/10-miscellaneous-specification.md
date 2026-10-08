@@ -48,7 +48,9 @@
 | `@aws-sdk/client-sqs` / `@aws-sdk/client-s3` | 投入 Lambda・データ連携 Lambda から AWS を呼ぶ |
 | `zod` | 入力の検証と型の導出（`typescript.md`） |
 | `aws-cdk-lib` / `constructs` | アプリ側の IaC |
+| `aws-cdk` | CDK の CLI（`cdk synth` / `deploy`） |
 | `aws-cdk-local` | `cdklocal`。CDK を LocalStack へ向ける |
+| `tsx` | CDK アプリ（TypeScript）をそのまま実行する |
 | `vitest` | テストランナー |
 | `aws-sdk-client-mock` | UT で AWS SDK の呼び出しをモックする |
 | `@types/aws-lambda` | Lambda のイベント・応答の型（`SQSBatchResponse` 等） |

@@ -17,6 +17,7 @@
 EventBridge Scheduler が決まった時刻に Step Functions を起動する。
 
 - Schedule 定義は CDK、入れ物の Schedule group は Terraform が持つ
+- 起動は毎日 9:00（日本時間）。実行入力は `{}`（失敗を注入しない）
 - 定時起動とは別に、AWS CLI から同じステートマシンを手動で起動できる
 
 ### F-2: バッチの段取り（Step Functions）
