@@ -33,6 +33,23 @@ function formatLine(level: string, message: string, fields: LogFields): string {
 }
 
 /**
+ * 投げられた値をログ項目にする。`Error` 以外（文字列・オブジェクト）が投げられても情報を落とさない。
+ *
+ * @param error - 投げられた値
+ * @returns エラーの名前・メッセージ・スタックトレース
+ */
+function errorFields(error: unknown): LogFields {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+      stack: error.stack,
+    };
+  }
+  return { errorName: "NonError", errorMessage: String(error) };
+}
+
+/**
  * 構造化ロガーを作る。
  *
  * @param fields - すべての行に付ける共通項目（例: `{ function: "enqueue" }`）
@@ -46,6 +63,15 @@ export function createLogger(
   return {
     info: (message, extra = {}) => {
       sink(formatLine("INFO", message, { ...fields, ...extra }));
+    },
+    error: (message, error, extra = {}) => {
+      sink(
+        formatLine("ERROR", message, {
+          ...fields,
+          ...extra,
+          ...errorFields(error),
+        }),
+      );
     },
     child: (childFields) => createLogger({ ...fields, ...childFields }, sink),
   };

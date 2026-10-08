@@ -50,6 +50,7 @@
 | `aws-cdk-local` | `cdklocal`。CDK を LocalStack へ向ける |
 | `vitest` | テストランナー |
 | `aws-sdk-client-mock` | UT で AWS SDK の呼び出しをモックする |
+| `@types/aws-lambda` | Lambda のイベント・応答の型（`SQSBatchResponse` 等） |
 | `esbuild` | `NodejsFunction` によるバンドル |
 | `eslint` / `typescript-eslint` / `eslint-plugin-jsdoc` / `eslint-config-prettier` / `prettier` | 静的解析・整形（`typescript.md`） |
 

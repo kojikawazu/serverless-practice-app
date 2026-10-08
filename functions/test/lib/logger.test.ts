@@ -88,6 +88,50 @@ describe("createLogger", () => {
     });
   });
 
+  describe("error", () => {
+    it("エラーの名前・メッセージ・スタックトレースを ERROR の 1 行に出す", () => {
+      const { logger, records } = captureLogger({ function: "enqueue" });
+      const error = new TypeError("壊れた");
+
+      logger.error("失敗しました", error, { messageId: "m1" });
+
+      expect(records()).toEqual([
+        {
+          level: "ERROR",
+          message: "失敗しました",
+          function: "enqueue",
+          messageId: "m1",
+          errorName: "TypeError",
+          errorMessage: "壊れた",
+          stack: error.stack,
+        },
+      ]);
+    });
+
+    it("Error 以外の値が投げられても、文字列にしてメッセージに入れる", () => {
+      const { logger, records } = captureLogger({});
+
+      logger.error("失敗しました", "文字列を throw した");
+
+      expect(records()).toEqual([
+        {
+          level: "ERROR",
+          message: "失敗しました",
+          errorName: "NonError",
+          errorMessage: "文字列を throw した",
+        },
+      ]);
+    });
+
+    it("呼び出し時の項目でエラーの名前を上書きできない", () => {
+      const { logger, records } = captureLogger({});
+
+      logger.error("失敗しました", new RangeError("x"), { errorName: "偽装" });
+
+      expect(records()[0]?.errorName).toBe("RangeError");
+    });
+  });
+
   describe("異常系", () => {
     it("循環参照を含む項目でも例外を投げず、失敗を示す行を 1 行出す", () => {
       const { logger, records } = captureLogger({ function: "x" });
