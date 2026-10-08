@@ -42,6 +42,7 @@
 | `test-design/` | `/test-design` | テスト設計ドキュメント |
 | `code-reading/` | `/code-reading` | コード読解ナレッジ |
 | [`references/`](references/) | （手動配置） | 元資料・外部から持ち込んだ参照資料（[AWS バッチ構成の整理と確認事項](references/aws-batch-architecture.md)） |
+| [`guides/`](guides/) | （手動配置） | 使っている技術の解説。仕様の決定は 01〜11 が正本で、解説からは参照する（[LocalStack 解説](guides/localstack.md)） |
 
 ## 関連
 
