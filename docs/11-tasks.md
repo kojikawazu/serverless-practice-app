@@ -50,10 +50,10 @@
 | LocalStack の起動定義（Hobby プラン・認証トークン） | #17 |
 | Terraform の土台と SSM 出力・Terraform の静的検査 | #18 |
 | CDK スタック（Lambda・ステートマシン・Schedule・EventBridge rule）と CDK の UT | #20 |
+| Slack 通知 Lambda が LocalStack の状態変化イベント（日時が文字列）を捨てる不具合の修正 | #30 |
 
 ## 将来課題・ブロッカー
 
 - 元資料「改善提案の候補」（DLQ アラーム・Consumer の冪等化・`waitForTaskToken`）は将来構成（09「将来構成」）
 - IT を CI に載せるかは M5 の結果で判断する（08「テストツール・実行方法」）
 - `aws-cdk-lib` が同梱する `brace-expansion` に高（high）の脆弱性（DoS）がある。開発時だけ使い、入力は自分のコードのグロブに限られるため実害は小さい。同梱のため外から更新できず、`aws-cdk-lib` の更新を待つ（Dependabot #16 で追う）
-- Slack 通知 Lambda が、LocalStack の状態変化イベント（日時が文字列）を「対象外」として捨てる不具合（#30）

@@ -96,6 +96,23 @@ describe("notifySlack", () => {
       ]);
     });
 
+    // LocalStack は日時を ISO 8601 の文字列で届ける（#30）。通知に使わない項目の形で通知を捨てない
+    it("startDate / stopDate が文字列でも通知する", async () => {
+      const { deps, slack } = setup();
+
+      await notifySlack(
+        event({
+          startDate: "2026-10-08T00:00:00.000Z",
+          stopDate: "2026-10-08T00:00:05.000Z",
+        }),
+        deps,
+      );
+
+      expect(slack()).toEqual([
+        expect.objectContaining({ executionName: "run-1", status: "FAILED" }),
+      ]);
+    });
+
     it("対象外の detail-type では通知せず、エラーも投げずに警告ログを出す", async () => {
       const { deps, slack, records } = setup();
 

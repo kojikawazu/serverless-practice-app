@@ -107,7 +107,9 @@ rule のイベントパターン:
 }
 ```
 
-Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `stateMachineArn` / `name` / `status` / `startDate` / `stopDate` / `error` / `cause`。`error` と `cause` は `TIMED_OUT` / `ABORTED` では `null` になりうる。
+Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `name` / `status` / `error` / `cause`。`error` と `cause` は `TIMED_OUT` / `ABORTED` では `null` になりうる。
+
+それ以外のフィールドは検証しない。`startDate` / `stopDate` は AWS ではエポックミリ秒、LocalStack では ISO 8601 文字列で届き、通知に使わない項目の形の違いで失敗通知を捨てないため（#30）。対象のステートマシンの絞り込みは rule のイベントパターン（`stateMachineArn`）が担う。
 
 ### スタブへの出力（構造化ログ）
 
