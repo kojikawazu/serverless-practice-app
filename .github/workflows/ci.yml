@@ -83,7 +83,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
-    # 通常は 7〜8 分。LocalStack が応答しないまま止まった場合に、枠を使い切らせない
+    # 通常は約 10 分（2026-10-11 の実績。うち IT が 4 分）。LocalStack が応答しないまま止まった場合に、枠を使い切らせない
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7

@@ -83,7 +83,7 @@ Lint 設定そのものも検査の対象にする。`test/lint/jsdoc.test.ts` �
 | 対象 | 実行 | CI |
 |---|---|---|
 | UT（handler・スキーマ・CDK）と型検査・Lint・整形 | `npm test` / `npm run typecheck` / `npm run lint` / `npm run format:check` | PR で毎回実行する。ドキュメント・ルールだけの変更ではスキップする |
-| IT | `./scripts/localstack.sh up` → `./scripts/stack.sh local up` の後に `npm run test:it`（約 4 分。#22 で DLQ へ移るまで待つため） | PR で毎回実行する（`ci.yml` の `it`。起動・デプロイ・IT・削除で 7〜8 分）。ドキュメント・ルールだけの変更ではスキップする。認証トークンはリポジトリのシークレット `LOCALSTACK_AUTH_TOKEN` から渡す |
+| IT | `./scripts/localstack.sh up` → `./scripts/stack.sh local up` の後に `npm run test:it`（約 4 分。#22 で DLQ へ移るまで待つため） | PR で毎回実行する（`ci.yml` の `it`。約 10 分。内訳は起動 1 分・デプロイ 2 分・IT 4 分・削除 2 分）。ドキュメント・ルールだけの変更ではスキップする。認証トークンはリポジトリのシークレット `LOCALSTACK_AUTH_TOKEN` から渡す |
 | 手動確認 | 03「操作方針」の手順 | 対象外 |
 
 ## 原則
