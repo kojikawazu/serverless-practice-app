@@ -86,6 +86,7 @@ SQS FIFO のメッセージ本文（JSON）と、送信時の属性。
 | `MessageDeduplicationId` | `<executionName>:<recipientId>` | 同じ実行の再投入（Step Functions の Retry）を 5 分以内なら重複排除する。UUID を毎回作ると効かない（元資料のリスク 2） |
 
 - 5 分を超えた再投入や、Consumer 側の二重処理は防げない。Consumer の冪等化は将来構成とする（09「将来構成」）
+- グループは実行をまたいで共有される。失敗し続けるメッセージ（`failAt: "consumer"`）がグループの先頭にあると、DLQ へ移るまで（約 3 分）同じ宛先の別の実行のメッセージも止まる。Consumer は同じグループの後続を失敗として返す（03「Consumer Lambda」）ため、仕組み上は後続の受信回数も増え、DLQ へ移りうる。IT はこのため `consumer` のケースを最後に順番に実行する（08「テストケース」）
 
 ### 連携ファイル（ExportFile）
 
