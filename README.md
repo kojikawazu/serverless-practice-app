@@ -39,6 +39,13 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 
 土台（Terraform）は次のスクリプトで操作します。`local` は LocalStack（`tflocal`）、`dev` は実 AWS（`terraform`）を対象にします。
 
+`dev` で初めて使う前に、state を置くバケットを作ります（Terraform では管理しません。[09「Terraform の state」](docs/09-architecture-specification.md#terraform-の-state)）。何度実行しても、ずれている設定だけを直します。
+
+```bash
+./scripts/tfstate-bucket.sh dev           # 無ければ作り、設定をそろえる（直す前に確認する）
+./scripts/tfstate-bucket.sh dev --check   # 直さずに比べる（ずれがあれば終了コード 1）
+```
+
 ```bash
 ./scripts/terraform.sh local init     # state の置き場所を設定する
 ./scripts/terraform.sh local apply    # 土台を作る（IAM・SQS・S3・Schedule group・SSM）
@@ -61,7 +68,7 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 ./scripts/batch.sh local dlq                   # DLQ のメッセージ数を出す
 ```
 
-受け入れ条件（[02](docs/02-requirements-specification.md#受け入れ条件)）は IT でまとめて確かめられます。LocalStack の起動とデプロイが前提で、約 4 分かかります。CI（`ci.yml` の `it`）も同じスクリプトを同じ順で実行します。
+受け入れ条件（[02](docs/02-requirements-specification.md#受け入れ条件)）と `tfstate-bucket.sh` は IT でまとめて確かめられます。LocalStack の起動とデプロイが前提で、約 4 分かかります。CI（`ci.yml` の `it`）も同じスクリプトを同じ順で実行します。
 
 ```bash
 npm run test:it

@@ -213,7 +213,12 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 | `dev` | 実 AWS の共有バケット `kojikawazu-tfstate`、キー `serverless-practice-app/dev/terraform.tfstate` | 手元の state を失うと実 AWS のリソースを見失うため |
 | `local` | LocalStack 内の S3（`tflocal` が backend の向き先を LocalStack へ差し替える） | LocalStack の再起動でリソースごと消えるため、state も同じ寿命の使い捨てでよい |
 
-- state バケットは Terraform で管理しない（自分の state を置くバケットを自分で作れないため）。冪等なスクリプトで作成し、バージョニング有効・公開アクセス禁止にする。スクリプトは実装時に `scripts/` へ置く
+- state バケットは Terraform で管理しない（自分の state を置くバケットを自分で作れないため）。冪等なスクリプト `scripts/tfstate-bucket.sh dev` で作成し、次の設定にそろえる。バケット名・リージョンは `versions.tf` の backend から読む（書き写さない）
+  - バージョニング有効 / 公開アクセスのブロック 4 項目すべて有効 / オブジェクトの所有者は `BucketOwnerEnforced`（ACL を使わない）/ 暗号化は SSE-S3
+  - バケットポリシーで HTTPS 以外のアクセスを拒否する
+  - ライフサイクル: 古い版は 90 日で消すが、新しい順に 10 版は日数に関わらず残す。途中で止まったマルチパートアップロードは 7 日で消す
+  - 項目ごとに今の設定と比べ、ずれている項目だけを直す（2 回目の実行では何も変えない）。`--check` は直さずに比べ、ずれがあれば終了コード 1 で終える
+  - 他のアカウントが持つ名前・別リージョンのバケットはエラーで止める（バケット名は全体で一意のため、他人のバケットに state を書かせない）。設定を読めないときも「未設定」とみなさずに止める
 - ロックは S3 のネイティブロック（`use_lockfile = true`）を使い、DynamoDB テーブルは作らない
 - `envs/*.tfvars` は秘匿値を置かない前提でコミットする。秘匿値が必要になったら `*.secret.tfvars`（Git 管理外）に分ける
 - backend の共通部分（バケット・リージョン・`use_lockfile`）は `infra/terraform/versions.tf`、ステージで変わる `key` は `envs/<stage>.s3.tfbackend` に置き、`init` で渡す（`scripts/terraform.sh`）
