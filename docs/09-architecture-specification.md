@@ -24,7 +24,7 @@
 | Terraform → CDK の受け渡し | SSM Parameter Store |
 | ローカル実行 | LocalStack（Docker）+ `tflocal` / `cdklocal` |
 | 実 AWS | 個人の検証用アカウント（ステージ名 `dev`） |
-| CI | GitHub Actions（markdownlint / shellcheck / 秘匿ファイル検出 / 型検査・テスト / Terraform の整形・構文） |
+| CI | GitHub Actions（markdownlint / shellcheck / 秘匿ファイル検出 / 型検査・テスト / Terraform の整形・構文 / LocalStack での IT） |
 | パッケージ管理 | npm（リポジトリ直下に 1 つ） |
 
 ## 構成方針
@@ -47,7 +47,7 @@
 │   │   └── envs/         # <stage>.tfvars（変数）/ <stage>.s3.tfbackend（state のキー）。秘匿値は置かない
 │   └── cdk/              # アプリ（Lambda・Step Functions・Schedule・EventBridge rule）。bin/（入口）・lib/（スタック）・test/
 ├── scripts/              # 検査・デプロイ補助スクリプト
-└── test/                 # リポジトリ全体の設定に対するテスト（Lint 設定の回帰テスト等）
+└── test/                 # リポジトリ全体に対するテスト（Lint 設定の回帰テスト等）と IT（test/it/）
 ```
 
 元資料では Terraform と CDK が別リポジトリだが、デモでは 1 リポジトリ内の 2 ディレクトリで代替する。「変更が 2 か所にまたがる」構造はそのまま残る。
@@ -148,11 +148,12 @@ Lambda の環境変数に秘匿値は無い（外部サービスはすべてス�
 
 LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイントは、LocalStack が注入する設定に任せる。コード側でエンドポイントを分岐しない。
 
-手元（開発機）で使う環境変数は次の 1 つだけで、`.env`（Git 管理外）に置く。雛形は `.env.example`。
+手元（開発機）で使う環境変数は次のとおりで、`.env`（Git 管理外）に置く。雛形は `.env.example`。
 
 | 変数 | 用途 | 参照箇所 |
 |------|------|----------|
-| `LOCALSTACK_AUTH_TOKEN` | LocalStack の起動に要る認証トークン（下記「LocalStack の認証」） | `docker-compose.yml` |
+| `LOCALSTACK_AUTH_TOKEN` | LocalStack の起動に要る認証トークン（下記「LocalStack の認証」）。CI ではリポジトリのシークレットから渡す | `docker-compose.yml` |
+| `LAMBDA_IGNORE_ARCHITECTURE` | 任意。`1` なら Lambda の `ARM_64` 指定を無視してホストのアーキテクチャで動かす。x86 のホスト（CI のランナー・Intel の Mac）用で、既定は `0`。Lambda は JS だけでネイティブモジュールを含まないため、動作は変わらない | `docker-compose.yml` |
 
 ## ローカル開発セットアップ
 
@@ -174,11 +175,11 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 1. `.env.example` を `.env` にコピーし、`LOCALSTACK_AUTH_TOKEN` を入れる
 2. LocalStack を起動する（`./scripts/localstack.sh up`。使うサービスがすべて使える状態になるまで待つ）
 3. 依存を入れる（`npm ci`）
-4. 土台を作る（`./scripts/terraform.sh local init` → `./scripts/terraform.sh local apply`）
-5. アプリを作る（`cdklocal bootstrap` → `cdklocal deploy -c stage=local`）
-6. Step Functions の実行を手動で起動し、各 Lambda のログを確認する
+4. 土台とアプリを作る（`./scripts/stack.sh local up`。Terraform → CDK の順に作る）
+5. 実行を起動して結果を見る（`./scripts/batch.sh local run [failAt]` → 表示された実行名で `./scripts/batch.sh local logs <実行名>`）。受け入れ条件をまとめて確かめるなら `npm run test:it`
+6. 消す（`./scripts/stack.sh local down`。CDK → Terraform の順に消す）
 
-コマンドの正本は `scripts/` に置き、README からはスクリプトを呼ぶだけにする（4 以降は実装時に足す）。
+コマンドの正本は `scripts/` に置き、README からはスクリプトを呼ぶだけにする。Terraform・CDK を個別に操作するときは `scripts/terraform.sh` / `scripts/cdk.sh` を使う。
 
 ### LocalStack の認証
 

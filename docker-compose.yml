@@ -11,6 +11,9 @@ services:
     environment:
       # トークンは Git 管理外の .env から読む（.env.example を参照）。未設定なら起動前にエラーで止める
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?.env に LOCALSTACK_AUTH_TOKEN を設定してください（.env.example を参照）}
+      # 1 なら Lambda のアーキテクチャ指定（ARM_64）を無視し、ホストのアーキテクチャで動かす。
+      # x86 のホスト（CI のランナー・Intel の Mac）用。既定は 0（指定どおりに動かす。docs/09「環境変数」）
+      LAMBDA_IGNORE_ARCHITECTURE: ${LAMBDA_IGNORE_ARCHITECTURE:-0}
     volumes:
       # Lambda の実行環境（コンテナ）を LocalStack が起動するために、Docker ソケットを渡す
       - /var/run/docker.sock:/var/run/docker.sock

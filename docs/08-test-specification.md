@@ -50,11 +50,20 @@
 | 17 | 通知: 対象外の `detail-type` では何も出さず、エラーも投げない | UT | 準正常系 |
 | 18 | CDK: Consumer のタイムアウトを SSM（`consumer/timeout-seconds`）から取り、値を直書きしていない | UT | 異常系（設定ずれの検出） |
 | 19 | CDK: Lambda タスクの `Retry` に `InjectedFailureError` / `ValidationError` が含まれない | UT | 異常系（設定ずれの検出） |
-| 20 | `failAt` なしの実行が `SUCCEEDED` になり、S3 にファイルができる | IT | 正常系 |
-| 21 | `failAt: "dataSync"` の実行が `FAILED` になり、Slack スタブのログが出る | IT | 準正常系 |
-| 22 | `failAt: "consumer"` の実行後、DLQ に 3 件届く | IT | 準正常系 |
+| 20 | `failAt` なしの実行が `SUCCEEDED` になり、配信対象の件数のメール送信・S3 のファイル・BigQuery / Cuenote FC への出力がそろう | IT | 正常系 |
+| 21 | `failAt: "dataSync"` の実行が `FAILED` になり、S3 にファイルが残り、BigQuery / Cuenote FC へは出力されず、Slack スタブのログが出る | IT | 準正常系 |
+| 22 | `failAt: "consumer"` の実行が `SUCCEEDED` のまま、DLQ に配信対象の件数のメッセージが届き、Slack スタブのログは出ない | IT | 準正常系 |
 | 23 | `dev` で Schedule が実行を起動し、`FAILED` で通知が出る | 手動 | 正常系 |
 | 24 | Consumer: 失敗したメッセージと同じグループの後続は送らずに失敗として返し、別グループは送る | UT | 準正常系 |
+| 25 | `failAt: "enqueue"` の実行が `FAILED` になり、Slack スタブのログに実行 ARN と `FAILED` が出て、メールは送られない | IT | 準正常系 |
+| 26 | `failAt` が未定義の値の実行が `ValidationError` で `FAILED` になり、Slack スタブのログが出る | IT | 準正常系 |
+
+IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
+
+- **確認はすべて実行名で絞り込む。** LocalStack には前回の実行のログ・ファイルが残るため。キューと DLQ だけは、残ったメッセージが FIFO の同じグループの今回のメッセージを止めるため、開始時に空にする
+- **ケースは順番に実行し、`consumer`（#22）を最後に置く。** グループは配信対象ごとで実行をまたいで共有されるため、失敗し続けるメッセージが他のケースのメッセージを巻き込む（05「メールメッセージ」）
+- **「出ない」ことは、先に出るはずのログ（Slack スタブ等）を確認してから一定時間待って確かめる。** すぐに見て 0 件だと、処理がまだ届いていないだけでも通ってしまう
+- 前提（LocalStack の起動・デプロイ）が無ければ、スキップではなく失敗で終える
 
 #18 は、可視性タイムアウトと Consumer のタイムアウトのずれを「検査で見つける」のではなく「ずれない構造にする」方針（04「連動するパラメータ」）に合わせ、CDK が値を自分で持たずに SSM から取っていることを固定する。Terraform 側の 6 倍の計算は `scripts/lint-terraform.sh` の検査対象のコードにあり、変数の検証（`validation`）で上限を守る。
 
@@ -74,7 +83,7 @@ Lint 設定そのものも検査の対象にする。`test/lint/jsdoc.test.ts` �
 | 対象 | 実行 | CI |
 |---|---|---|
 | UT（handler・スキーマ・CDK）と型検査・Lint・整形 | `npm test` / `npm run typecheck` / `npm run lint` / `npm run format:check` | PR で毎回実行する。ドキュメント・ルールだけの変更ではスキップする |
-| IT | LocalStack を起動して `npm run test:it` | 当面は手元のみ。LocalStack の起動時間と安定性を見て、CI へ載せるかを決める |
+| IT | `./scripts/localstack.sh up` → `./scripts/stack.sh local up` の後に `npm run test:it`（約 4 分。#22 で DLQ へ移るまで待つため） | PR で毎回実行する（`ci.yml` の `it`。約 10 分。内訳は起動 1 分・デプロイ 2 分・IT 4 分・削除 2 分）。ドキュメント・ルールだけの変更ではスキップする。認証トークンはリポジトリのシークレット `LOCALSTACK_AUTH_TOKEN` から渡す |
 | 手動確認 | 03「操作方針」の手順 | 対象外 |
 
 ## 原則

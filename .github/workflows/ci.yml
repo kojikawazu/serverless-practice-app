@@ -1,5 +1,5 @@
-# TypeScript の型検査・Lint・整形チェック・テストと、Terraform の整形・構文の検査。
-# コマンドの正本は package.json の scripts と scripts/lint-terraform.sh。CI もローカルも同じものを呼ぶ。
+# TypeScript の型検査・Lint・整形チェック・テストと、Terraform の整形・構文の検査、LocalStack での IT。
+# コマンドの正本は package.json の scripts と scripts/*.sh。CI もローカルも同じものを呼ぶ。
 name: ci
 
 on:
@@ -14,6 +14,10 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # 手元と同じ版に固定する（infra/terraform/versions.tf の required_version は 1.14 系）。terraform と it の両ジョブで使う
+  TERRAFORM_VERSION: 1.14.3
 
 jobs:
   # ドキュメント・ルールだけの変更では重いジョブを動かさない（.claude/rules/github-actions.md）。
@@ -67,9 +71,53 @@ jobs:
       - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4
         with:
-          # 手元と同じ版に固定する（infra/terraform/versions.tf の required_version は 1.14 系）
-          terraform_version: 1.14.3
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           # 既定の wrapper は出力を捕捉して加工するため、素の terraform として動かす
           terraform_wrapper: false
       - name: Lint Terraform
         run: ./scripts/lint-terraform.sh
+
+  # IT（docs/08「テストツール・実行方法」）。手元と同じスクリプトを同じ順で呼ぶため、
+  # 起動・デプロイ・削除の手順（scripts/localstack.sh・stack.sh）が壊れたら、ここが落ちる
+  it:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    # 通常は約 10 分（2026-10-11 の実績。うち IT が 4 分）。LocalStack が応答しないまま止まった場合に、枠を使い切らせない
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Install tflocal
+        env:
+          # 手元と同じ版に固定する（docs/09「前提ツール」）
+          TERRAFORM_LOCAL_VERSION: 0.26.0
+        run: pipx install "terraform-local==${TERRAFORM_LOCAL_VERSION}"
+      - run: npm ci
+      - name: Start LocalStack
+        env:
+          # トークンはこのステップにだけ渡す（npm ci で入る依存などから読めないようにする）。
+          # 未設定（fork からの PR を含む）なら docker-compose.yml の検査で起動前に落ちる。スキップして緑にはしない
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+          # ランナーは x86、Lambda は ARM_64 指定のため、指定を無視してランナーのアーキテクチャで動かす。
+          # Lambda は esbuild でまとめた JS だけでネイティブモジュールを含まないため、動作は変わらない。
+          # QEMU で arm64 を再現すると、コールドスタートが Consumer のタイムアウト（10 秒）に近づくため使わない
+          LAMBDA_IGNORE_ARCHITECTURE: "1"
+        run: ./scripts/localstack.sh up
+      - name: Deploy
+        run: ./scripts/stack.sh local up
+      - name: Integration test
+        run: npm run test:it
+      - name: Tear down
+        run: ./scripts/stack.sh local down
+      - name: Show LocalStack logs
+        if: failure()
+        # docker compose logs は docker-compose.yml を読み直し、トークン未設定の検査で落ちるため、コンテナを直接指す
+        run: docker logs serverless-practice-app-localstack

@@ -45,7 +45,27 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 ./scripts/terraform.sh local destroy  # 土台を消す（CDK を先に消す）
 ```
 
-アプリ（CDK）のデプロイと実行のコマンドは、実装時に追記します。
+土台とアプリをまとめて作る・消すときは `stack.sh` を使います（Terraform → CDK の順に作り、CDK → Terraform の順に消します）。`local` では確認を省き、`dev` では Terraform・CDK の確認を残します。アプリ（CDK）だけを操作するときは `./scripts/cdk.sh <stage> {bootstrap|deploy|destroy}` を使います。
+
+```bash
+./scripts/stack.sh local up    # Terraform → CDK の順に作る
+./scripts/stack.sh local down  # CDK → Terraform の順に消す
+```
+
+バッチの実行と結果の確認は `batch.sh` で行います。`failAt` で失敗を注入できます（[02「F-6」](docs/02-requirements-specification.md#f-6-失敗の注入)）。
+
+```bash
+./scripts/batch.sh local run                   # 起動し、終わるまで待って状態・エラーを出す
+./scripts/batch.sh local run dataSync          # enqueue / dataSync / consumer のいずれかで失敗を注入する
+./scripts/batch.sh local logs <実行名>         # 4 つの Lambda のログから、その実行の行だけを出す
+./scripts/batch.sh local dlq                   # DLQ のメッセージ数を出す
+```
+
+受け入れ条件（[02](docs/02-requirements-specification.md#受け入れ条件)）は IT でまとめて確かめられます。LocalStack の起動とデプロイが前提で、約 4 分かかります。CI（`ci.yml` の `it`）も同じスクリプトを同じ順で実行します。
+
+```bash
+npm run test:it
+```
 
 ドキュメント・シェルスクリプト・Terraform の検査は次のコマンドで実行します。
 

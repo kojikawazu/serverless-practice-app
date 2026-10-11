@@ -16,10 +16,12 @@ set -euo pipefail
 
 # このデモが使うサービス（docs/04「対応環境」）。ヘルスチェックの名前で書く
 REQUIRED_SERVICES="lambda sqs s3 stepfunctions scheduler events ssm iam logs"
-ENDPOINT="${LOCALSTACK_ENDPOINT:-http://127.0.0.1:4566}"
 WAIT_SECONDS="${LOCALSTACK_WAIT_SECONDS:-120}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/aws-stage.sh
+source "${REPO_ROOT}/scripts/lib/aws-stage.sh"
+ENDPOINT="$LOCALSTACK_ENDPOINT"
 cd "$REPO_ROOT"
 
 # ヘルスチェックの JSON を標準入力から読み、使えないサービスを空白区切りで出力する。
