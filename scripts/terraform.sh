@@ -36,6 +36,18 @@ if ! command -v "$tf" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Terraform（1.14 の AWS SDK）は aws login のプロファイルを読めない。AWS CLI で一時的な認証情報に変換し、
+# 環境変数でこのプロセスにだけ渡す（ファイルには書かない）。認証情報が既に環境変数にあれば、そのまま使う
+if [[ "$stage" == dev && -z "${AWS_ACCESS_KEY_ID:-}" ]]; then
+  # 代入と eval を分ける。eval "$(...)" の形では、変換の失敗が eval の成功で上書きされて止まらないため
+  if ! credentials="$(aws configure export-credentials --format env)"; then
+    echo "エラー: AWS の認証情報を取り出せません。aws login --profile <名前> の後、AWS_PROFILE を設定して実行してください（docs/09「ステージ」）" >&2
+    exit 1
+  fi
+  eval "$credentials"
+  unset credentials
+fi
+
 # tflocal は作業ディレクトリに接続先の上書きファイルを書き出すため、-chdir ではなく移動して実行する
 cd "$TF_DIR"
 

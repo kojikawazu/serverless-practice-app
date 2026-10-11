@@ -247,6 +247,26 @@ bucket_exists() {
   return 1
 }
 
+# バケットを作る。作った直後のバケットは、しばらく head-bucket に 404 を返すことがある（実 AWS で確認）。
+# そのため「無い」と判定して作り直そうとすると BucketAlreadyOwnedByYou になる。自分のバケットなので、作れた扱いで先へ進む。
+# 他のアカウントが持つ名前（BucketAlreadyExists）などは、そのまま止める
+create_bucket() {
+  local err
+  err="$(mktemp)"
+  if s3api create-bucket --bucket "$BUCKET" --create-bucket-configuration "LocationConstraint=${REGION}" >/dev/null 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  if grep -q "(BucketAlreadyOwnedByYou)" "$err"; then
+    rm -f "$err"
+    echo "  （バケットは作成済みでした。作成直後で、まだ見えていなかったものとして続けます）"
+    return 0
+  fi
+  cat "$err" >&2
+  rm -f "$err"
+  return 1
+}
+
 echo "バケット ${BUCKET}（${REGION}、アカウント ${ACCOUNT_ID}、ステージ ${stage}）"
 
 # 1. 比べて、ずれている項目を集める
@@ -298,7 +318,7 @@ fi
 # 3. ずれている項目だけを直す
 for item in "${drift[@]}"; do
   if [[ "$item" == bucket ]]; then
-    s3api create-bucket --bucket "$BUCKET" --create-bucket-configuration "LocationConstraint=${REGION}" >/dev/null
+    create_bucket
   else
     # put 系の一部（ライフサイクル）は応答を出力するため捨てる
     apply "$item" >/dev/null
