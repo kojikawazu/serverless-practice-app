@@ -76,7 +76,7 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 
 ## 受け入れ条件
 
-`local` ステージで次をすべて確認できたら完成とする。Scheduler と状態変化イベントは LocalStack で動かない可能性があるため、その 2 点は `dev` で確認する（09「LocalStack で要検証の点」）。
+`local` ステージで次をすべて確認できたら完成とする。Scheduler は LocalStack では起動しないため、定時の起動は `dev` で確認する。状態変化イベントは LocalStack でも rule に届くが、本物どおりかを `dev` でも確かめる（09「LocalStack での検証結果」）。
 
 - [ ] `failAt` なしで実行すると、実行が `SUCCEEDED` になり、配信対象の件数だけメール送信スタブのログが出て、S3 に連携ファイルが 1 つでき、BigQuery / Cuenote FC スタブのログが出る
 - [ ] `failAt: "enqueue"` で実行すると、実行が `FAILED` になり、キューにメッセージが積まれず、Slack スタブのログに実行 ARN と状態 `FAILED` が出る

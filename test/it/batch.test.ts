@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { MySqlStub } from "../../functions/src/stubs/mysql-stub";
 import {
+  abortExecution,
   findExportKeys,
   findStubLogs,
   pollUntil,
@@ -12,7 +13,7 @@ import {
 } from "./helpers/localstack";
 import type { DeployedResources } from "./helpers/localstack";
 
-// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25・#26）。
+// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27）。
 // 前提: scripts/localstack.sh up → scripts/stack.sh local up
 //
 // ケースは順番に実行する（concurrent を付けない。同じファイルのテストは既定で順番に走る）。
@@ -148,6 +149,23 @@ describe("バッチの実行（LocalStack）", () => {
         executionArn: execution.executionArn,
         status: "FAILED",
         error: "ValidationError",
+      }),
+    ]);
+  });
+
+  it("実行を止める: ABORTED になり、Slack スタブに実行 ARN と ABORTED が出る", async () => {
+    const name = `${RUN_ID}-abort`;
+
+    const execution = await abortExecution(resources.stateMachineArn, name);
+
+    expect(execution.status).toBe("ABORTED");
+    // 止めた実行は error / cause を持たない（docs/07「状態変化イベント」）
+    expect(await waitForSlackLogs(name)).toEqual([
+      expect.objectContaining({
+        executionArn: execution.executionArn,
+        status: "ABORTED",
+        error: null,
+        cause: null,
       }),
     ]);
   });
