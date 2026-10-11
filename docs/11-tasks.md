@@ -29,7 +29,6 @@
 | タスク | 状態 | 優先度 |
 |--------|------|--------|
 | M2: Dependabot の設定（npm・GitHub Actions） | 未着手 | 中 |
-| M4: state バケットを作る冪等スクリプト（`dev` 用） | 未着手 | 中 |
 | M6: `dev` へのデプロイ・手動確認・削除 | 未着手 | 中 |
 
 ## 完了済み（実績）
@@ -51,6 +50,7 @@
 | Slack 通知 Lambda が LocalStack の状態変化イベント（日時が文字列）を捨てる不具合の修正 | #30 |
 | LocalStack 向けのデプロイ・実行スクリプト（`stack.sh` / `cdk.sh` / `batch.sh`）と IT（CI でも実行） | #21 |
 | LocalStack で要検証の 2 点の確認（Scheduler は起動しない・状態変化イベントは届く）と `ABORTED` の IT | #22 |
+| state バケットを作る冪等スクリプト（`tfstate-bucket.sh`）と IT | #19 |
 
 ## 将来課題・ブロッカー
 

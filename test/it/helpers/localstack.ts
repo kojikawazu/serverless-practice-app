@@ -39,8 +39,7 @@ const CLIENT_CONFIG = {
 
 const sfn = new SFNClient(CLIENT_CONFIG);
 const logs = new CloudWatchLogsClient(CLIENT_CONFIG);
-// LocalStack はバケット名のサブドメイン形式を解決できないため、パス形式で接続する
-const s3 = new S3Client({ ...CLIENT_CONFIG, forcePathStyle: true });
+const s3 = createS3Client();
 const sqs = new SQSClient(CLIENT_CONFIG);
 const ssm = new SSMClient(CLIENT_CONFIG);
 
@@ -66,6 +65,24 @@ export type DeployedResources = {
   /** メール送信キューの DLQ の URL */
   dlqUrl: string;
 };
+
+/**
+ * LocalStack の S3 クライアントを作る。
+ *
+ * @param accountId - 操作するアカウントの ID（12 桁）。省略すると既定のアカウント（000000000000）。
+ *   LocalStack は、アクセスキーが 12 桁の数字ならそれをアカウント ID として扱う
+ * @returns S3 クライアント
+ */
+export function createS3Client(accountId?: string): S3Client {
+  return new S3Client({
+    ...CLIENT_CONFIG,
+    ...(accountId === undefined
+      ? {}
+      : { credentials: { accessKeyId: accountId, secretAccessKey: "test" } }),
+    // LocalStack はバケット名のサブドメイン形式を解決できないため、パス形式で接続する
+    forcePathStyle: true,
+  });
+}
 
 /**
  * 待つ。
