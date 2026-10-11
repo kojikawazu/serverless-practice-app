@@ -13,7 +13,7 @@ terraform {
   # init で -backend-config として渡す（scripts/terraform.sh）。
   # local では tflocal が接続先を LocalStack に差し替え、このバケットを LocalStack 内に自動で作る
   backend "s3" {
-    bucket       = "kojikawazu-tfstate"
+    bucket       = "serverless-practice-app-tfstate"
     region       = "ap-northeast-1"
     use_lockfile = true
     encrypt      = true
