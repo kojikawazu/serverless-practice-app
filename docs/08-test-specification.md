@@ -19,7 +19,7 @@
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン） |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
-| 手動確認 | AWS CLI | `dev` でのみ確かめられる 2 点（Scheduler の定時起動・状態変化イベントによる通知） |
+| 手動確認 | AWS CLI | `dev` でのみ確かめられる 2 点（Scheduler の定時起動・状態変化イベントによる通知）。結果は 09「`dev` での検証結果」 |
 
 - **モックするのは外部 I/O だけ**（`testing.md`）。スタブは「外部サービスの代わり」だが、ビジネスロジックの一部ではないので UT でもそのまま使う。出力の確認はログの捕捉で行う
 - AWS SDK のモックには `aws-sdk-client-mock` を使う
