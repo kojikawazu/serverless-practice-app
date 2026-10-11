@@ -9,6 +9,7 @@ import {
   ListStateMachinesCommand,
   SFNClient,
   StartExecutionCommand,
+  StopExecutionCommand,
 } from "@aws-sdk/client-sfn";
 import type { DescribeExecutionCommandOutput } from "@aws-sdk/client-sfn";
 import {
@@ -189,6 +190,39 @@ export async function runExecution(
       input: JSON.stringify(input),
     }),
   );
+  return waitUntilFinished(executionArn);
+}
+
+/**
+ * 実行を起動し、すぐに止める。止まるまで待つ。
+ * 止める前に終わったステップ（キューへの投入など）は取り消されない。
+ *
+ * @param stateMachineArn - ステートマシンの ARN
+ * @param name - 実行名（IT の中で一意にする）
+ * @returns 止まった実行の情報（状態・実行 ARN）
+ * @throws {Error} 待っても止まらなかった場合
+ */
+export async function abortExecution(
+  stateMachineArn: string,
+  name: string,
+): Promise<DescribeExecutionCommandOutput> {
+  const { executionArn } = await sfn.send(
+    new StartExecutionCommand({ stateMachineArn, name, input: "{}" }),
+  );
+  await sfn.send(new StopExecutionCommand({ executionArn }));
+  return waitUntilFinished(executionArn);
+}
+
+/**
+ * 実行が終わる（RUNNING でなくなる）まで待つ。
+ *
+ * @param executionArn - 実行 ARN
+ * @returns 終わった実行の情報
+ * @throws {Error} 待っても終わらなかった場合
+ */
+function waitUntilFinished(
+  executionArn: string | undefined,
+): Promise<DescribeExecutionCommandOutput> {
   return pollUntil(
     () => sfn.send(new DescribeExecutionCommand({ executionArn })),
     (execution) => execution.status !== "RUNNING",

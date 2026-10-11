@@ -57,6 +57,7 @@
 | 24 | Consumer: 失敗したメッセージと同じグループの後続は送らずに失敗として返し、別グループは送る | UT | 準正常系 |
 | 25 | `failAt: "enqueue"` の実行が `FAILED` になり、Slack スタブのログに実行 ARN と `FAILED` が出て、メールは送られない | IT | 準正常系 |
 | 26 | `failAt` が未定義の値の実行が `ValidationError` で `FAILED` になり、Slack スタブのログが出る | IT | 準正常系 |
+| 27 | 起動直後に止めた実行が `ABORTED` になり、Slack スタブのログに実行 ARN と `ABORTED` が出る（状態変化イベントが `FAILED` 以外でも rule に届くことの確認。09「LocalStack での検証結果」） | IT | 準正常系 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 

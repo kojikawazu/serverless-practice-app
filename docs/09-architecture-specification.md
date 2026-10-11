@@ -227,12 +227,14 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 - 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
 - 試し終えたら CDK → Terraform の順に削除する
 
-### LocalStack で要検証の点
+### LocalStack での検証結果
 
-次の 2 点は、LocalStack で本物と同じように動くかを実装時に確認する。動かない場合は、手動起動や直接呼び出しで代替し、本物どおりの確認は `dev` ステージで行う。
+本物と同じように動くかが分からなかった 2 点を、LocalStack 2026.09.1 で確かめた（2026-10-11。#22）。**LocalStack で動いたことは本物で動くことの証明にはならない**ため、どちらも最後に `dev` で確認する（02「受け入れ条件」）。
 
-- EventBridge Scheduler がターゲットを定時に起動するか
-- Step Functions の状態変化イベントが EventBridge rule に届くか
+| 点 | 結果 | `local` での扱い |
+|---|---|---|
+| EventBridge Scheduler がターゲットを定時に起動するか | **起動しない。** `at()` / `rate()` / `cron()`（タイムゾーン指定あり）の Schedule を、デプロイ済みと同じターゲット・ロールで作り 3 分以上待ったが、実行は 0 件で、LocalStack のログにも起動を試みた形跡が無かった。公式ドキュメントにも「モックのみで、スケジュールの実行・ターゲットの起動は再現しない」とある。作成・取得などの API は動くため、デプロイは通る | 実行は `scripts/batch.sh local run` で手動で起動する（Scheduler と同じ `StartExecution` を、入力 `{}` で呼ぶ）。定時の起動は `dev` で確かめる |
+| Step Functions の状態変化イベントが EventBridge rule に届くか | **届く。** `FAILED` と `ABORTED` は rule を経て Slack 通知 Lambda まで届き、`SUCCEEDED` は rule の条件で除外される（いずれも IT で確認。08 #21・#22・#25〜#27）。`TIMED_OUT` は発生させるのに 5 分かかるため未確認（rule の条件は同じ。出力の形は UT #16 で確認） | IT で確かめる。イベントの日時の項目が本物と違う形（文字列）で届くため、通知 Lambda は日時の項目を検証しない（07「状態変化イベント」・#30） |
 
 ## 将来構成
 
