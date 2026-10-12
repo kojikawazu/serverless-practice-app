@@ -8,13 +8,15 @@ import {
   purgeQueue,
   receiveRecipientIds,
   resolveResources,
+  restoreExecutionTimeout,
   runExecution,
   setEventSourceEnabled,
+  shortenExecutionTimeout,
   sleep,
 } from "./helpers/localstack";
 import type { DeployedResources } from "./helpers/localstack";
 
-// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27）。
+// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27・#32）。
 // 前提: scripts/localstack.sh up → scripts/stack.sh local up
 //
 // ケースは順番に実行する（concurrent を付けない。同じファイルのテストは既定で順番に走る）。
@@ -46,6 +48,8 @@ beforeAll(async () => {
     .sort();
   // 前回の IT が enqueue のケースの途中で止まると、Consumer が止まったまま残るため戻す
   await setEventSourceEnabled(resources.consumerEventSourceUuid, true);
+  // 前回の IT が TIMED_OUT のケースの途中で止まると、定義が書き換わったまま残り、以後の実行がすべて TIMED_OUT になるため戻す
+  await restoreExecutionTimeout(resources.stateMachineArn);
   // 前回の中断した IT・手動実行が残したメッセージは、同じグループの今回のメッセージを止めるため消す
   await purgeQueue(resources.queueUrl);
   await purgeQueue(resources.dlqUrl);
@@ -176,6 +180,27 @@ describe("バッチの実行（LocalStack）", () => {
         status: "ABORTED",
         error: null,
         cause: null,
+      }),
+    ]);
+  });
+
+  it("実行全体のタイムアウトを越える: TIMED_OUT になり、Slack スタブに実行 ARN と TIMED_OUT が出る", async () => {
+    const name = `${RUN_ID}-timeout`;
+    // 本番のタイムアウト（5 分）を待たずに TIMED_OUT を起こすため、この実行の間だけ定義を書き換える
+    await shortenExecutionTimeout(resources.stateMachineArn);
+    let execution;
+    try {
+      execution = await runExecution(resources.stateMachineArn, name, {});
+    } finally {
+      await restoreExecutionTimeout(resources.stateMachineArn);
+    }
+
+    expect(execution.status).toBe("TIMED_OUT");
+    // error / cause は確かめない。LocalStack では null だが、実 AWS の値は観測していない（docs/09「LocalStack での検証結果」）
+    expect(await waitForSlackLogs(name)).toEqual([
+      expect.objectContaining({
+        executionArn: execution.executionArn,
+        status: "TIMED_OUT",
       }),
     ]);
   });
