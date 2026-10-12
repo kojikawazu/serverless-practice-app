@@ -1,0 +1,65 @@
+# 依存の更新を Dependabot で追う（docs/06「依存パッケージ」）。
+# 対象は npm と GitHub Actions。Terraform provider・LocalStack のイメージ・run: 内のバージョン（actionlint 等）は対象外で、手で更新する。
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      # AWS SDK はほぼ毎日リリースされるため、毎日にすると PR が溢れる
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    # 公開から 7 日待ってから提案する（公開直後に取り下げられる版・乗っ取られた版を避ける）。
+    # セキュリティ更新にはかからない
+    cooldown:
+      default-days: 7
+    # 一緒に上げないと型や peer の不一致で CI が落ちるものを 1 PR にまとめる
+    groups:
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - aws-sdk-client-mock
+      aws-cdk:
+        patterns:
+          - aws-cdk
+          - aws-cdk-lib
+          - aws-cdk-local
+          - constructs
+      lint:
+        patterns:
+          - eslint
+          - "eslint-*"
+          - "@eslint/*"
+          - typescript-eslint
+          - globals
+          - prettier
+      test:
+        patterns:
+          - vitest
+          - "@vitest/*"
+          - vite
+    ignore:
+      # typescript-eslint 8.71 の対応範囲が typescript <6.1.0 のため。
+      # typescript-eslint の peerDependencies が 6.1 以上を含んだら、この除外を外す
+      - dependency-name: typescript
+        versions: [">=6.1.0"]
+      # Lambda の実行環境（infra/cdk の NODEJS_22_X）と .nvmrc が Node 22 のため、型も 22 系に留める。
+      # 実行環境を上げるときに一緒に外す
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"

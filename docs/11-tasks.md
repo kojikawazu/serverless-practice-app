@@ -28,8 +28,7 @@
 
 | タスク | 状態 | 優先度 |
 |--------|------|--------|
-| M2: Dependabot の設定（npm・GitHub Actions） | 未着手 | 中 |
-| M6: `dev` へのデプロイ・手動確認・削除 | 未着手 | 中 |
+| なし（M1〜M6 の範囲は完了。今後の候補は「将来課題・ブロッカー」） | — | — |
 
 ## 完了済み（実績）
 
@@ -51,8 +50,11 @@
 | LocalStack 向けのデプロイ・実行スクリプト（`stack.sh` / `cdk.sh` / `batch.sh`）と IT（CI でも実行） | #21 |
 | LocalStack で要検証の 2 点の確認（Scheduler は起動しない・状態変化イベントは届く）と `ABORTED` の IT | #22 |
 | state バケットを作る冪等スクリプト（`tfstate-bucket.sh`）と IT | #19 |
+| `dev`（実 AWS）へのデプロイ・手動確認・削除と、そこで見つかったスクリプトの不具合の修正 | #23 |
+| Dependabot の設定（npm・GitHub Actions） | #16 |
 
 ## 将来課題・ブロッカー
 
 - 元資料「改善提案の候補」（DLQ アラーム・Consumer の冪等化・`waitForTaskToken`）は将来構成（09「将来構成」）
-- `aws-cdk-lib` が同梱する `brace-expansion` に高（high）の脆弱性（DoS）がある。開発時だけ使い、入力は自分のコードのグロブに限られるため実害は小さい。同梱のため外から更新できず、`aws-cdk-lib` の更新を待つ（Dependabot #16 で追う）
+- `aws-cdk-lib` 2.272.0 が同梱する `brace-expansion`（5.0.9）に高（high）の脆弱性（DoS）がある。開発時だけ使い、入力は自分のコードのグロブに限られるため実害は小さい。同梱のため外から更新できない。2.273.0 は修正版（5.0.12）を同梱しているため、Dependabot の `aws-cdk` グループの PR で取り込んで解消する
+- Dependabot の対象外（Terraform provider・LocalStack のイメージ・`run:` 内のバージョン）は手で更新する（`.github/dependabot.yml` の冒頭）
