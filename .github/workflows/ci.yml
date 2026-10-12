@@ -36,7 +36,7 @@ jobs:
         with:
           # 除外リストを AND で結ぶ。既定の 'some' では NOT A OR NOT B になり、ほぼ全ファイルが true になる。
           # この filter に肯定パターンを混ぜない（AND になって常に false になる）。
-          predicate-quantifier: "every"
+          predicate-quantifier: "invalid-for-verification"
           filters: |
             app:
               - '!docs/**'

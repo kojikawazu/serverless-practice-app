@@ -160,6 +160,3 @@ export async function handler(event: unknown): Promise<EnqueueResult> {
     logger,
   });
 }
-
-// 検証用（マージしない）: 型エラーで check を落とす
-export const BROKEN: number = "not a number";
