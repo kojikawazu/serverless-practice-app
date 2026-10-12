@@ -107,7 +107,7 @@ rule のイベントパターン:
 }
 ```
 
-Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `name` / `status` / `error` / `cause`。`error` と `cause` は `TIMED_OUT` / `ABORTED` では `null` になりうる。
+Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `name` / `status` / `error` / `cause`。`error` と `cause` は `TIMED_OUT` / `ABORTED` では `null` になりうる（`TIMED_OUT` は実 AWS・LocalStack とも値が無かった。09「`dev` での検証結果」）。
 
 それ以外のフィールドは検証しない。`startDate` / `stopDate` は AWS ではエポックミリ秒、LocalStack では ISO 8601 文字列で届き、通知に使わない項目の形の違いで失敗通知を捨てないため（#30）。対象のステートマシンの絞り込みは rule のイベントパターン（`stateMachineArn`）が担う。
 
@@ -136,6 +136,6 @@ Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `n
 | `InjectedFailureError` | `failAt` で失敗を注入した | しない | `FAILED` |
 | `EnqueuePartialFailureError` | `SendMessageBatch` の一部が失敗した | する。全件を送り直すが、重複排除 ID が決定的なため送信済みの分は重複しない | 尽きたら `FAILED` |
 | `Lambda.ServiceException` ほか一時的なエラー | Lambda サービス側の一時的な失敗 | する（04「リトライ」） | 尽きたら `FAILED` |
-| `States.Timeout` | ステートマシンが 5 分を超えた | — | `TIMED_OUT`。LocalStack では実行の `error` が `null` になり、この名前は出ない（09「LocalStack での検証結果」。実 AWS は未観測） |
+| `States.Timeout` | ステートマシンが 5 分を超えた | — | `TIMED_OUT`。この名前は実行履歴の `ExecutionTimedOut` イベントにだけ出る。実 AWS では実行（`describe-execution`）に `error` / `cause` の項目が無く、通知にも値が届かない（09「`dev` での検証結果」）。LocalStack では実行の `error` が `null` で、この名前は出ない（09「LocalStack での検証結果」） |
 
 Consumer Lambda はエラーを投げず、失敗したメッセージを `batchItemFailures` で返す。Slack 通知 Lambda は対象外のイベントでもエラーを投げない（04「エラーハンドリング・堅牢性」）。
