@@ -204,13 +204,18 @@ Terraform → CDK の順にデプロイし、削除はその逆（CDK → Terraf
 
 CI からのデプロイは行わない（デモのため手動で十分）。
 
+`dev` の認証は、MFA 付きの IAM ユーザーで `aws login --profile <名前>` を実行し、`AWS_PROFILE=<名前>` を設定してスクリプトを呼ぶ。長期のアクセスキーは発行しない。
+
+- CDK・AWS CLI は `aws login` のプロファイルをそのまま読む
+- Terraform 1.14.3 は読めない（`No valid credential sources found` で止まる。2026-10-11 に確認）。そのため `scripts/terraform.sh` が `dev` のときだけ、`aws configure export-credentials` で一時的な認証情報に変換し、環境変数でそのプロセスにだけ渡す。認証情報が既に環境変数にあれば、変換せずにそのまま使う
+
 ### Terraform の state
 
 backend は `s3` の 1 種類に統一し、置き場所をステージで分ける。運用ルールの正本は [`.claude/rules/iac.md`](../.claude/rules/iac.md)。
 
 | ステージ | state の置き場所 | 理由 |
 |---|---|---|
-| `dev` | 実 AWS の共有バケット `kojikawazu-tfstate`、キー `serverless-practice-app/dev/terraform.tfstate` | 手元の state を失うと実 AWS のリソースを見失うため |
+| `dev` | 実 AWS のこのリポジトリ専用のバケット `serverless-practice-app-tfstate`、キー `serverless-practice-app/dev/terraform.tfstate` | 手元の state を失うと実 AWS のリソースを見失うため |
 | `local` | LocalStack 内の S3（`tflocal` が backend の向き先を LocalStack へ差し替える） | LocalStack の再起動でリソースごと消えるため、state も同じ寿命の使い捨てでよい |
 
 - state バケットは Terraform で管理しない（自分の state を置くバケットを自分で作れないため）。冪等なスクリプト `scripts/tfstate-bucket.sh dev` で作成し、次の設定にそろえる。バケット名・リージョンは `versions.tf` の backend から読む（書き写さない）
@@ -219,6 +224,8 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
   - ライフサイクル: 古い版は 90 日で消すが、新しい順に 10 版は日数に関わらず残す。途中で止まったマルチパートアップロードは 7 日で消す
   - 項目ごとに今の設定と比べ、ずれている項目だけを直す（2 回目の実行では何も変えない）。`--check` は直さずに比べ、ずれがあれば終了コード 1 で終える
   - 他のアカウントが持つ名前・別リージョンのバケットはエラーで止める（バケット名は全体で一意のため、他人のバケットに state を書かせない）。設定を読めないときも「未設定」とみなさずに止める
+  - 作った直後のバケットは、しばらく存在の確認（`head-bucket`）に 404 を返すことがある（2026-10-11 に実 AWS で確認。LocalStack では起きない）。そのため作成が `BucketAlreadyOwnedByYou` を返したら、作成済みとして続ける
+- バケットはこのリポジトリ専用にする（2026-10-11 に決定。.claude/rules/iac.md の「共有バケットを prefix で分ける」から外れる）。検証用アカウントは他のプロジェクトと共用だが、共有の state バケットはまだ無く、prefix は権限の境界にもならない（iac.md）。専用にすれば名前だけで持ち主のリポジトリが分かり、デモを畳むときもバケットごと扱える。キーの先頭（prefix）はリポジトリ名のまま残す
 - ロックは S3 のネイティブロック（`use_lockfile = true`）を使い、DynamoDB テーブルは作らない
 - `envs/*.tfvars` は秘匿値を置かない前提でコミットする。秘匿値が必要になったら `*.secret.tfvars`（Git 管理外）に分ける
 - backend の共通部分（バケット・リージョン・`use_lockfile`）は `infra/terraform/versions.tf`、ステージで変わる `key` は `envs/<stage>.s3.tfbackend` に置き、`init` で渡す（`scripts/terraform.sh`）
@@ -240,6 +247,22 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 |---|---|---|
 | EventBridge Scheduler がターゲットを定時に起動するか | **起動しない。** `at()` / `rate()` / `cron()`（タイムゾーン指定あり）の Schedule を、デプロイ済みと同じターゲット・ロールで作り 3 分以上待ったが、実行は 0 件で、LocalStack のログにも起動を試みた形跡が無かった。公式ドキュメントにも「モックのみで、スケジュールの実行・ターゲットの起動は再現しない」とある。作成・取得などの API は動くため、デプロイは通る | 実行は `scripts/batch.sh local run` で手動で起動する（Scheduler と同じ `StartExecution` を、入力 `{}` で呼ぶ）。定時の起動は `dev` で確かめる |
 | Step Functions の状態変化イベントが EventBridge rule に届くか | **届く。** `FAILED` と `ABORTED` は rule を経て Slack 通知 Lambda まで届き、`SUCCEEDED` は rule の条件で除外される（いずれも IT で確認。08 #21・#22・#25〜#27）。`TIMED_OUT` は発生させるのに 5 分かかるため未確認（rule の条件は同じ。出力の形は UT #16 で確認） | IT で確かめる。イベントの日時の項目が本物と違う形（文字列）で届くため、通知 Lambda は日時の項目を検証しない（07「状態変化イベント」・#30） |
+
+### `dev` での検証結果
+
+LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` で確かめた（2026-10-11。#23。08 #23）。
+
+| 点 | 結果 | 確かめ方 |
+|---|---|---|
+| EventBridge Scheduler がステートマシンを起動するか | **起動する。** 23:09:00（Asia/Tokyo）の予定に対し 23:09:07 に実行が始まり、Schedule に設定した入力がそのまま実行入力になった | 定時の Schedule（`cron(0 9 * * ? *)`）と同じグループ・同じロール・同じターゲットで、1 回だけ起動する Schedule（`at()`、入力 `{"failAt":"dataSync"}`、実行後に自動で削除）を AWS CLI で一時的に作った。定時の Schedule 自体は、設定（式・タイムゾーン・ターゲット・ロール・入力 `{}`）を AWS CLI で読んで確かめ、発火までは待っていない |
+| `FAILED` の状態変化イベントで通知が出るか | **出る。** 上の実行が DataSync の注入エラーで Retry されずに `FAILED` になり、Slack スタブのログに実行 ARN・状態 `FAILED`・エラー名が出た。日時の項目の形が LocalStack と違う実 AWS（07「状態変化イベント」）でも、通知は落ちなかった（届いたイベントの日時そのものは観測していない） | `scripts/batch.sh dev logs <実行名>` で 4 つの Lambda のログを確かめた |
+
+あわせて `failAt` なしの実行（`scripts/batch.sh dev run`）が `SUCCEEDED` になり、メール送信スタブ 3 件・S3 の連携ファイル・BigQuery / Cuenote FC スタブのログがそろい、Slack スタブのログが出ないことも確かめた。
+
+確認の後、CDK → Terraform の順にエラーなく削除でき、`serverless-practice-app-dev-*` のリソース（スタック・Lambda・ステートマシン・Schedule・rule・ロググループ・IAM ロール・SQS・SSM パラメータ・exports バケット）が 0 件で、state のリソースも 0 件になることを確かめた。次の 2 つは CDK → Terraform の削除では消えず、残っている。
+
+- state バケット `serverless-practice-app-tfstate`: Terraform では管理しない（上記「Terraform の state」）。再デプロイ時にそのまま使う
+- CDK のブートストラップ（`CDKToolkit` スタック）: `cdk destroy` では消えない。アカウント・リージョン単位で 1 つの作業用リソースで、消すかどうかは未決定。消す場合は、スタックが持つアセット用の S3 バケットを空にしてからスタックを削除する（バケットに中身があるとスタックの削除が失敗する）
 
 ## 将来構成
 

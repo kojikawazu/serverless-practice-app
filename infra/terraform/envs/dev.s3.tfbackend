@@ -1,2 +1,2 @@
-# dev ステージの state のキー。バケット kojikawazu-tfstate は scripts で作る（Terraform では管理しない。iac.md）
+# dev ステージの state のキー。バケット serverless-practice-app-tfstate は scripts/tfstate-bucket.sh で作る（Terraform では管理しない。iac.md）
 key = "serverless-practice-app/dev/terraform.tfstate"

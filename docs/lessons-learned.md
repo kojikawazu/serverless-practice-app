@@ -4,6 +4,45 @@
 
 新しいエントリはこの見出しの直下に追記する（新しいものが上）。
 
+## 2026-10-11 バッチ起動スクリプトが、認証切れを「ステートマシンが無い（デプロイ漏れ）」と案内していた
+
+### 概要
+
+`scripts/batch.sh` の ARN を引く関数が `aws` の失敗を見ておらず、`aws login` のセッション切れで、デプロイ済みなのに「見つかりません。デプロイしてください」と表示した。止まりはしたが、原因と逆の対処へ誘導していた。
+
+### 詳細
+
+- 何が起きたか: #23 で `dev` の実行を起動しようとした際、セッション切れで `list-state-machines` が失敗したのに、デプロイ漏れのメッセージが出た。`local` では認証が要らないため、`dev` で初めて表面化した
+- なぜ起きたか（根本原因）: 関数が `arn="$(state_machine_arn)"` とコマンド置換の中で呼ばれており、bash 3.2（macOS 標準。`inherit_errexit` が無い）ではそこに `set -e` が引き継がれない。そのため関数内の `aws` が失敗しても処理が続き、空の出力を「該当なし」の分岐で受けた。「取得できなかった」と「無かった」を同じ値（空文字）で表していた
+- 教訓 / 次からどうする: コマンド置換の中で呼ばれる関数では、外部コマンドの失敗を `if ! x="$(cmd)"; then ... fi` で明示的に判定し、「取得の失敗」と「結果が空」を別の分岐・別のメッセージにする。`set -e` に頼れるのはトップレベルの代入だけと考える。同じ日に `scripts/terraform.sh` でも `eval "$(cmd)"` が変換の失敗を握り潰す形を同じ書き方で避けており、シェルで繰り返し現れる型である
+- 関連: #23、`.claude/rules/error-handling.md`（判定不能を正常値に丸めない）、`scripts/batch.sh`、`scripts/terraform.sh`
+
+## 2026-10-11 Terraform 1.14 が aws login のプロファイルを読めず、dev へ plan できなかった
+
+### 概要
+
+MFA 付き IAM ユーザーで `aws login --profile` した認証を、AWS CLI と CDK は読めるが Terraform 1.14.3 は読めず、`No valid credential sources found` で止まった。`scripts/terraform.sh` で一時的な認証情報へ変換して渡すようにした。
+
+### 詳細
+
+- 何が起きたか: #23 で `scripts/terraform.sh dev init/plan` を実行すると、同じ `AWS_PROFILE` で AWS CLI は通るのに Terraform だけ認証に失敗した。長期のアクセスキーを発行しない方針のため、アクセスキーで回避する選択肢も無かった
+- なぜ起きたか（根本原因）: `aws login` が書くプロファイルには `login_session` しか無く、アクセスキーも `credential_process` も含まない（認証情報は `~/.aws/login/cache` に置かれる）。Terraform 1.14.3（AWS プロバイダ 6.68.0）はこの形のプロファイルから認証情報を得られなかった。ツールごとに SDK とそのバージョンが違うため、「CLI で通る」ことは「他のツールでも通る」根拠にならない
+- 教訓 / 次からどうする: 新しい認証方式を採るときは、使う全ツール（AWS CLI・CDK・Terraform）でそれぞれ `sts get-caller-identity` 相当が通るかを最初に確かめる。読めないツールには `aws configure export-credentials --format env` で一時的な認証情報へ変換し、ファイルに書かず環境変数でそのプロセスにだけ渡す。変換の失敗が握り潰されないよう、代入と `eval` を分けて終了コードを見る
+- 関連: #23、docs/09「ステージ」、`scripts/terraform.sh`
+
+## 2026-10-11 作成直後の S3 バケットが head-bucket に 404 を返し、state バケットの作成スクリプトが自分のバケットの作り直しで失敗した
+
+### 概要
+
+`scripts/tfstate-bucket.sh dev` は、`head-bucket` の 404 を「バケットが無い」と判定して作成する。実 AWS では、作ったばかりの自分のバケットに `head-bucket` が 404 を返し、作成に進んで `BucketAlreadyOwnedByYou` で止まった。LocalStack の IT では起きなかった。
+
+### 詳細
+
+- 何が起きたか: #23 で state バケットを実 AWS に作る際、作ったばかりの自分のバケットについて `head-bucket` が 404 を返し、スクリプトが作成に進んで `BucketAlreadyOwnedByYou` で失敗した
+- なぜ起きたか（根本原因）: スクリプトが「`head-bucket` が 404 なら無い」という前提で作成に進んでいた。実 AWS ではこの前提が作成直後に崩れることがあり、LocalStack では崩れないため IT で見つからなかった。作成直後に 404 が返る AWS 側の仕組みまでは確かめていない
+- 教訓 / 次からどうする: 「存在確認 → 無ければ作る」の流れでは、存在確認の結果だけに頼らず、作成側のエラーで「既に自分のものとしてある」（`BucketAlreadyOwnedByYou`）を成功として扱い、他人のもの（`BucketAlreadyExists`）とは区別して止める。LocalStack で通った冪等性は、実 AWS で再実行して確かめ直す
+- 関連: #23、#19（PR #35）、docs/09「Terraform の state」、`scripts/tfstate-bucket.sh`
+
 ## 2026-10-09 失敗通知 Lambda が、通知に使わない日時項目の形の違いで失敗通知を捨てていた
 
 ### 概要

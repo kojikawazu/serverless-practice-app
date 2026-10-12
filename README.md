@@ -39,6 +39,8 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 
 土台（Terraform）は次のスクリプトで操作します。`local` は LocalStack（`tflocal`）、`dev` は実 AWS（`terraform`）を対象にします。
 
+`dev` では `aws login --profile <名前>` でログインし、`AWS_PROFILE=<名前>` を付けて各スクリプトを呼びます（長期のアクセスキーは使いません。[09「ステージ」](docs/09-architecture-specification.md#ステージ)）。
+
 `dev` で初めて使う前に、state を置くバケットを作ります（Terraform では管理しません。[09「Terraform の state」](docs/09-architecture-specification.md#terraform-の-state)）。何度実行しても、ずれている設定だけを直します。
 
 ```bash

@@ -45,8 +45,13 @@ prefix="$(resource_prefix "$stage")"
 # ステートマシンの ARN を名前から引く。見つからなければ、デプロイ漏れとして止める
 state_machine_arn() {
   local arn
-  arn="$(aws stepfunctions list-state-machines \
-    --query "stateMachines[?name=='${prefix}-batch'].stateMachineArn | [0]" --output text)"
+  # 一覧を取れなかったこと（認証切れ・接続先の誤り）を「見つからない」と区別する。
+  # この関数は $(...) の中で呼ばれ、bash 3.2 ではそこに set -e が引き継がれないため、終了コードを明示的に見る
+  if ! arn="$(aws stepfunctions list-state-machines \
+    --query "stateMachines[?name=='${prefix}-batch'].stateMachineArn | [0]" --output text)"; then
+    echo "エラー: ステートマシンの一覧を取得できません。AWS の認証（aws login）と接続先を確認してください" >&2
+    return 1
+  fi
   if [[ -z "$arn" || "$arn" == "None" ]]; then
     echo "エラー: ステートマシン ${prefix}-batch が見つかりません。scripts/stack.sh ${stage} up でデプロイしてください" >&2
     return 1
