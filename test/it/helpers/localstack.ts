@@ -14,8 +14,10 @@ import {
   DescribeExecutionCommand,
   ListStateMachinesCommand,
   SFNClient,
+  DescribeStateMachineCommand,
   StartExecutionCommand,
   StopExecutionCommand,
+  UpdateStateMachineCommand,
 } from "@aws-sdk/client-sfn";
 import type { DescribeExecutionCommandOutput } from "@aws-sdk/client-sfn";
 import {
@@ -25,6 +27,7 @@ import {
   SQSClient,
 } from "@aws-sdk/client-sqs";
 import { GetParameterCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { z } from "zod";
 
 /** IT の対象ステージ。IT は LocalStack 専用で、実 AWS（dev）には向けない */
 const STAGE = "local";
@@ -49,6 +52,41 @@ const logs = new CloudWatchLogsClient(CLIENT_CONFIG);
 const s3 = createS3Client();
 const sqs = new SQSClient(CLIENT_CONFIG);
 const ssm = new SSMClient(CLIENT_CONFIG);
+
+/**
+ * 実行全体のタイムアウトを越えさせるために、定義の先頭へ足す Wait ステートの名前。
+ * IT が中断して定義が書き換わったまま残っても、この名前で見つけて戻せる
+ */
+const TIMEOUT_WAIT_STATE = "ItTimeoutWait";
+
+/** 書き換えた定義の、実行全体のタイムアウト（秒） */
+const SHORTENED_TIMEOUT_SECONDS = 2;
+
+/** 足す Wait ステートの待ち時間（秒）。タイムアウトより十分長くし、Wait の途中で必ず TIMED_OUT にする */
+const TIMEOUT_WAIT_SECONDS = 10;
+
+/**
+ * ステートマシンの定義（ASL）のうち、タイムアウトの書き換えで触る項目。
+ * それ以外の項目（QueryLanguage など）は読み書きの間そのまま保つ
+ */
+const definitionSchema = z.looseObject({
+  StartAt: z.string(),
+  /** 実行全体のタイムアウト（秒）。省略は「タイムアウトなし」 */
+  TimeoutSeconds: z.number().optional(),
+  States: z.record(z.string(), z.unknown()),
+});
+
+/** ステートマシンの定義（ASL）。タイムアウトの書き換えで触る項目だけを型にする */
+type Definition = z.infer<typeof definitionSchema>;
+
+/**
+ * 書き換えのとき Wait ステートの Comment に残す、元の定義の値。
+ * 元のタイムアウトを IT に書き写さずに戻すため、書き換えた定義そのものに持たせる
+ */
+const timeoutBackupSchema = z.object({
+  /** 元の実行全体のタイムアウト（秒）。`null` は元の定義に TimeoutSeconds が無かったこと */
+  TimeoutSeconds: z.number().nullable(),
+});
 
 /** Lambda の関数名の <name> 部分 */
 export type FunctionName =
@@ -400,6 +438,104 @@ export async function setEventSourceEnabled(
     (state) => state === expected,
     60_000,
     1_000,
+  );
+}
+
+/**
+ * デプロイ済みのステートマシンの定義を読む。
+ *
+ * @param stateMachineArn - ステートマシンの ARN
+ * @returns 定義
+ * @throws {Error} 定義が読めない、または ASL の形でない場合
+ */
+async function describeDefinition(
+  stateMachineArn: string,
+): Promise<Definition> {
+  const { definition } = await sfn.send(
+    new DescribeStateMachineCommand({ stateMachineArn }),
+  );
+  return definitionSchema.parse(JSON.parse(definition ?? "null"));
+}
+
+/**
+ * 実行がすぐ TIMED_OUT になるよう、デプロイ済みのステートマシンの定義を書き換える。
+ * 先頭に Wait ステートを足し、実行全体のタイムアウトをその待ち時間より短くする。
+ * 実行は Wait の途中で終わり、Lambda は呼ばれない。ARN は変わらないため、本番と同じ EventBridge rule を通る。
+ * 終わったら必ず {@link restoreExecutionTimeout} で戻す。
+ *
+ * @param stateMachineArn - ステートマシンの ARN
+ * @returns 書き換えたら解決する
+ * @throws {Error} 既に書き換わっている場合（元の値を上書きして戻せなくなるため）
+ */
+export async function shortenExecutionTimeout(
+  stateMachineArn: string,
+): Promise<void> {
+  const original = await describeDefinition(stateMachineArn);
+  if (TIMEOUT_WAIT_STATE in original.States) {
+    throw new Error(
+      `定義に ${TIMEOUT_WAIT_STATE} が残っています。restoreExecutionTimeout で戻してから書き換えてください`,
+    );
+  }
+  const backup: z.infer<typeof timeoutBackupSchema> = {
+    TimeoutSeconds: original.TimeoutSeconds ?? null,
+  };
+  const shortened: Definition = {
+    ...original,
+    StartAt: TIMEOUT_WAIT_STATE,
+    TimeoutSeconds: SHORTENED_TIMEOUT_SECONDS,
+    States: {
+      ...original.States,
+      [TIMEOUT_WAIT_STATE]: {
+        Type: "Wait",
+        Seconds: TIMEOUT_WAIT_SECONDS,
+        Next: original.StartAt,
+        Comment: JSON.stringify(backup),
+      },
+    },
+  };
+  await sfn.send(
+    new UpdateStateMachineCommand({
+      stateMachineArn,
+      definition: JSON.stringify(shortened),
+    }),
+  );
+}
+
+/**
+ * {@link shortenExecutionTimeout} の書き換えを戻す。書き換わっていなければ何もしない。
+ * 元の開始ステートは Wait ステートの Next から、元のタイムアウトは Comment から取る。
+ * CDK のテンプレートは変わっていないため、再デプロイでは戻らない（変更なしで終わる）
+ *
+ * @param stateMachineArn - ステートマシンの ARN
+ * @returns 戻したら（書き換わっていなければすぐに）解決する
+ * @throws {Error} Wait ステートが想定した形でない場合（何を戻せばよいか決められないため）
+ */
+export async function restoreExecutionTimeout(
+  stateMachineArn: string,
+): Promise<void> {
+  const current = await describeDefinition(stateMachineArn);
+  const { [TIMEOUT_WAIT_STATE]: waitState, ...states } = current.States;
+  if (waitState === undefined) {
+    return;
+  }
+  const { Next: startAt, Comment: comment } = z
+    .object({ Next: z.string(), Comment: z.string() })
+    .parse(waitState);
+  const backup = timeoutBackupSchema.parse(JSON.parse(comment));
+  const { TimeoutSeconds: _shortened, ...rest } = current;
+  const restored: Definition = {
+    ...rest,
+    StartAt: startAt,
+    States: states,
+    ...(backup.TimeoutSeconds === null
+      ? {}
+      : { TimeoutSeconds: backup.TimeoutSeconds }),
+  };
+  await sfn.send(
+    new UpdateStateMachineCommand({
+      stateMachineArn,
+      definition: JSON.stringify(restored),
+    }),
   );
 }
 
