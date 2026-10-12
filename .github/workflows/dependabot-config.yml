@@ -1,0 +1,30 @@
+# .github/dependabot.yml のスキーマ検査。誤りは actionlint の対象外で、GitHub もマージ後に
+# Insights に出すだけのため、マージ前にここで落とす（#38）。
+name: dependabot-config
+
+# パスフィルタはかけない。実行が数秒で終わる一方、必須チェックにした際に
+# パスフィルタの設計を誤ると PR がマージ不能になるため（起動しないワークフローの
+# 必須チェックは pending のまま完了しない）。actionlint / markdownlint / shellcheck と同じ理由。
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dependabot-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 検査コマンドとバージョンは scripts/ の 1 箇所に定義し、CI もローカルもそれを実行する
+      # （手順を CI とローカルに書き分けると、必ずどちらかが腐る）
+      - name: Validate dependabot.yml
+        run: ./scripts/lint-dependabot.sh

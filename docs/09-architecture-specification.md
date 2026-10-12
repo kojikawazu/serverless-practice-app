@@ -169,6 +169,7 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 | AWS CLI v2 | 実行の起動・確認 | `brew install awscli` |
 | `tflocal` | Terraform を LocalStack へ向ける | `brew install pipx` → `PIPX_HOME=~/.local/pipx pipx install terraform-local`（`PIPX_HOME` を付けないと、macOS では空白を含むパスに入り起動できない） |
 | `cdklocal` / `cdk` | CDK を LocalStack へ向ける | npm の devDependencies で導入 |
+| `check-jsonschema` | `.github/dependabot.yml` の検証（`scripts/lint-dependabot.sh`） | 導入不要。スクリプトが `pipx run` で固定版を実行する（pipx は `tflocal` の行と同じ） |
 
 ### 手順（ステージ `local`）
 

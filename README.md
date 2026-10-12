@@ -76,12 +76,13 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 npm run test:it
 ```
 
-ドキュメント・シェルスクリプト・Terraform の検査は次のコマンドで実行します。
+ドキュメント・シェルスクリプト・Terraform・Dependabot の設定の検査は次のコマンドで実行します。
 
 ```bash
 ./scripts/lint-docs.sh
 ./scripts/lint-shell.sh
 ./scripts/lint-terraform.sh   # Terraform の整形・構文（CI も同じものを実行）
+./scripts/lint-dependabot.sh  # .github/dependabot.yml のスキーマ検証（pipx が要る。09「前提ツール」）
 ./scripts/check-secret-files.sh
 ```
 

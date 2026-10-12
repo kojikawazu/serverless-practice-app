@@ -52,6 +52,7 @@
 | state バケットを作る冪等スクリプト（`tfstate-bucket.sh`）と IT | #19 |
 | `dev`（実 AWS）へのデプロイ・手動確認・削除と、そこで見つかったスクリプトの不具合の修正 | #23 |
 | Dependabot の設定（npm・GitHub Actions） | #16 |
+| `dependabot.yml` のスキーマ検証（`lint-dependabot.sh`）を CI で常時実行する | #38 |
 
 ## 将来課題・ブロッカー
 
