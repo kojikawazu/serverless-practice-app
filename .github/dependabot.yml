@@ -14,7 +14,7 @@ updates:
     # 公開から 7 日待ってから提案する（公開直後に取り下げられる版・乗っ取られた版を避ける）。
     # セキュリティ更新にはかからない
     cooldown:
-      default-days: 7
+      default-dayz: 7
     # 一緒に上げないと型や peer の不一致で CI が落ちるものを 1 PR にまとめる
     groups:
       aws-sdk:
@@ -58,7 +58,7 @@ updates:
       time: "09:00"
       timezone: Asia/Tokyo
     cooldown:
-      default-days: 7
+      default-dayz: 7
     groups:
       actions:
         patterns:
