@@ -71,6 +71,6 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 外部から到達できる入口が無いため、XSS・CSRF・CORS は対象外。SQL も発行しない（MySQL はスタブ）。
 
 - **インジェクション**: 入力値を S3 のキー・重複排除 ID に埋め込むため、`executionName` を文字種で制限する（上記「入力バリデーション」）
-- **依存パッケージ**: npm の依存は `package-lock.json` で固定し、Dependabot で更新を追う
+- **依存パッケージ**: npm の依存は `package-lock.json` で固定し、npm と GitHub Actions の更新を Dependabot で追う（`.github/dependabot.yml`）。公開から 7 日待ってから提案させ、公開直後に取り下げられる版を避ける（セキュリティ更新は待たない）。Terraform provider・LocalStack のイメージ・`run:` 内のバージョンは対象外で、手で更新する
 - **秘匿ファイルの混入**: `scripts/check-secret-files.sh` を CI で常時実行する（`static-analysis.md`）
 - **GitHub Actions**: `permissions` を最小に絞り、actionlint で検査する（`github-actions.md`）
