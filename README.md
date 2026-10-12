@@ -4,7 +4,17 @@
 
 ## 概要
 
-<!-- 記入: アプリケーションの目的・主な機能・技術スタックを記載する -->
+ヒアリングで整理した AWS バッチ構成を手元で動かし、サービス同士のつながりと、失敗がどう伝わるかを確かめるためのデモです。外部サービス（SendGrid / MySQL / BigQuery / Cuenote FC / Slack）はすべてスタブで、実在の宛先へは何も送りません。
+
+主な機能:
+
+- **定時起動**: EventBridge Scheduler が毎日 9:00（日本時間）に Step Functions のステートマシンを起動する（投入 → データ連携の順）
+- **メール送信**: 投入 Lambda が MySQL スタブの配信対象を SQS FIFO（+ DLQ）へ積み、Consumer Lambda が 1 件ずつメール送信スタブへ渡す
+- **データ連携**: データ連携 Lambda が MySQL スタブから読んだデータを、S3（実バケット）・BigQuery スタブ・Cuenote FC スタブへ書き出す
+- **失敗通知**: 実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、EventBridge rule が Slack 通知 Lambda を呼ぶ。Consumer 側の失敗（DLQ 行き）は通知されない（元資料のリスクの再現）
+- **失敗の注入**: 実行入力の `failAt` で投入・データ連携・Consumer のいずれかを失敗させ、通知に乗る / 乗らないの違いを確かめる
+
+技術スタックは TypeScript（Node.js 22）の Lambda、土台を Terraform・アプリを AWS CDK で管理する 2 段構成で、LocalStack（`local`）と実 AWS（`dev`）の両方へ同じ IaC でデプロイします。詳細は [09 アーキテクチャ仕様書](docs/09-architecture-specification.md#技術スタック) を参照してください。
 
 元資料は [docs/references/aws-batch-architecture.md](docs/references/aws-batch-architecture.md)、目的とスコープは [要求仕様書](docs/01-business-requirements.md) を参照してください。仕様書は [docs/](docs/README.md) を参照してください。
 
