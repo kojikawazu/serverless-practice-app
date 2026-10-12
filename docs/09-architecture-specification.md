@@ -10,6 +10,7 @@
 - [環境変数](#環境変数)
 - [ローカル開発セットアップ](#ローカル開発セットアップ)
 - [デプロイ](#デプロイ)
+- [CI とマージの条件](#ci-とマージの条件)
 - [将来構成](#将来構成)
 
 ## 技術スタック
@@ -24,7 +25,7 @@
 | Terraform → CDK の受け渡し | SSM Parameter Store |
 | ローカル実行 | LocalStack（Docker）+ `tflocal` / `cdklocal` |
 | 実 AWS | 個人の検証用アカウント（ステージ名 `dev`） |
-| CI | GitHub Actions（markdownlint / shellcheck / 秘匿ファイル検出 / 型検査・テスト / Terraform の整形・構文 / LocalStack での IT） |
+| CI | GitHub Actions（actionlint / markdownlint / shellcheck / 秘匿ファイル検出 / 型検査・テスト / Terraform の整形・構文 / LocalStack での IT） |
 | パッケージ管理 | npm（リポジトリ直下に 1 つ） |
 
 ## 構成方針
@@ -263,6 +264,31 @@ LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` 
 
 - state バケット `serverless-practice-app-tfstate`: Terraform では管理しない（上記「Terraform の state」）。再デプロイ時にそのまま使う
 - CDK のブートストラップ（`CDKToolkit` スタック）: `cdk destroy` では消えない。アカウント・リージョン単位で 1 つの作業用リソースで、消すかどうかは未決定。消す場合は、スタックが持つアセット用の S3 バケットを空にしてからスタックを削除する（バケットに中身があるとスタックの削除が失敗する）
+
+## CI とマージの条件
+
+main へは PR を通してしか入れず、次の必須チェックがすべて通らないとマージできない（2026-10-12 から。#43）。設定の正本は GitHub の ruleset `main` で、リポジトリのファイルには持たない。
+
+| 必須チェック | ワークフロー | ドキュメント・ルールだけの変更 |
+|---|---|---|
+| `secret-scan` / `actionlint` / `markdownlint` / `shellcheck` | 同名の各ワークフロー | 実行する |
+| `changes` | `ci.yml`（変更の範囲の判定） | 実行する |
+| `check`（型検査・Lint・整形・UT） / `terraform` / `it` | `ci.yml` | skipped（成功として扱われる） |
+
+- **`changes` も必須にする。** `check` などは `changes` の結果で動くかを決めるため、`changes` が落ちると skipped になり、skipped は必須チェックを通る。判定が落ちたまま重い検査を飛ばして緑にしないよう、判定そのものを必須にする
+- **ブランチを最新にしてからのマージは求めない**（ruleset の `strict` は `false`）。PR を 1 本ずつ順に出すため、毎回 rebase して IT（約 10 分）を回し直す手間に見合わない
+- **承認は 0 件でよい。** 一人で開発するため。マージは人が行う（`git.md`）。管理者も ruleset を迂回できない（bypass なし）
+- **fork からの PR は `it` が落ちてマージできない。** リポジトリのシークレット（`LOCALSTACK_AUTH_TOKEN`）は fork の PR に渡らない。スキップして緑にはしない（`ci.yml` の `it`）。取り込むときは手元で IT を通す
+- ジョブ名を変えると、必須チェックが来ない結果を待ち続けて PR が `pending` のまま止まる。ジョブ名を変えたら ruleset も直す
+
+設定は次のコマンドで確かめる。
+
+```bash
+gh api repos/kojikawazu/serverless-practice-app/rulesets \
+  --jq '.[] | select(.name == "main") | .id' \
+  | xargs -I{} gh api repos/kojikawazu/serverless-practice-app/rulesets/{} \
+      --jq '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context'
+```
 
 ## 将来構成
 

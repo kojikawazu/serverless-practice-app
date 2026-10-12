@@ -61,7 +61,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | 対象 | 方針 |
 |---|---|
 | 個人情報 | 扱わない。配信対象は `@example.com` の架空データのみ。ログに出してよい |
-| 秘匿値 | `LOCALSTACK_AUTH_TOKEN` のみ。手元の `.env`（Git 管理外）に置き、変数名だけを `.env.example` で共有する。CI では使わない（IT は手元で実行するため。08）。ほかに持つことになったら `dev` は Secrets Manager、手元は `.env` に置く（`security.md`） |
+| 秘匿値 | `LOCALSTACK_AUTH_TOKEN` のみ。手元の `.env`（Git 管理外）に置き、変数名だけを `.env.example` で共有する。CI ではリポジトリのシークレットから `it` ジョブの LocalStack を起動するステップにだけ渡す（08）。fork からの PR には渡らない（09「CI とマージの条件」）。ほかに持つことになったら `dev` は Secrets Manager、手元は `.env` に置く（`security.md`） |
 | S3 バケット | パブリックアクセスを全面ブロック。SSE-S3 で暗号化。バケットポリシーで HTTPS 以外のアクセスを拒否（`aws:SecureTransport`） |
 | SQS キュー・DLQ | SQS 管理の鍵で暗号化（SSE-SQS） |
 | Terraform の state | 09「Terraform の state」と `iac.md` に従う。秘匿値を含まないが、バケットはバージョニング有効・公開禁止 |
@@ -73,4 +73,6 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 - **インジェクション**: 入力値を S3 のキー・重複排除 ID に埋め込むため、`executionName` を文字種で制限する（上記「入力バリデーション」）
 - **依存パッケージ**: npm の依存は `package-lock.json` で固定し、npm と GitHub Actions の更新を Dependabot で追う（`.github/dependabot.yml`）。公開から 7 日待ってから提案させ、公開直後に取り下げられる版を避ける（セキュリティ更新は待たない）。Terraform provider・LocalStack のイメージ・`run:` 内のバージョンは対象外で、手で更新する
 - **秘匿ファイルの混入**: `scripts/check-secret-files.sh` を CI で常時実行する（`static-analysis.md`）
+- **秘密情報の push**: GitHub の Secret scanning と push protection を有効にしている。トークンの形をした文字列を含む push は GitHub が拒否し、既に入ったものはアラートになる。ファイル名で見る上の検査と、中身の形で見るこちらを重ねる
+- **main の保護**: GitHub の ruleset で、PR を通さない変更・force push・削除を禁止し、CI の必須チェックが通らない PR をマージできなくしている（09「CI とマージの条件」）
 - **GitHub Actions**: `permissions` を最小に絞り、actionlint で検査する（`github-actions.md`）
