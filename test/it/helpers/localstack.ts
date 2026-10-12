@@ -3,6 +3,12 @@ import {
   FilterLogEventsCommand,
 } from "@aws-sdk/client-cloudwatch-logs";
 import type { FilterLogEventsCommandOutput } from "@aws-sdk/client-cloudwatch-logs";
+import {
+  GetEventSourceMappingCommand,
+  LambdaClient,
+  ListEventSourceMappingsCommand,
+  UpdateEventSourceMappingCommand,
+} from "@aws-sdk/client-lambda";
 import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import {
   DescribeExecutionCommand,
@@ -38,6 +44,7 @@ const CLIENT_CONFIG = {
 };
 
 const sfn = new SFNClient(CLIENT_CONFIG);
+const lambda = new LambdaClient(CLIENT_CONFIG);
 const logs = new CloudWatchLogsClient(CLIENT_CONFIG);
 const s3 = createS3Client();
 const sqs = new SQSClient(CLIENT_CONFIG);
@@ -64,6 +71,8 @@ export type DeployedResources = {
   queueUrl: string;
   /** メール送信キューの DLQ の URL */
   dlqUrl: string;
+  /** Consumer をメール送信キューにつなぐイベントソースマッピングの UUID */
+  consumerEventSourceUuid: string;
 };
 
 /**
@@ -171,11 +180,25 @@ export async function resolveResources(): Promise<DeployedResources> {
       throw new Error(`DLQ ${String(dlqName)} の URL を引けません`);
     }
 
+    const { EventSourceMappings = [] } = await lambda.send(
+      new ListEventSourceMappingsCommand({
+        FunctionName: `${PREFIX}-consumer`,
+      }),
+    );
+    // Consumer のイベントソースはキュー 1 つだけ。複数あるならどれを止めればよいか決められない
+    const [mapping, ...rest] = EventSourceMappings;
+    if (mapping?.UUID === undefined || rest.length > 0) {
+      throw new Error(
+        `Consumer のイベントソースマッピングが 1 つではありません（${EventSourceMappings.length} 件）`,
+      );
+    }
+
     return {
       stateMachineArn,
       bucketName: await ssmValue("bucket/name"),
       queueUrl: await ssmValue("queue/url"),
       dlqUrl,
+      consumerEventSourceUuid: mapping.UUID,
     };
   } catch (error) {
     throw new Error(
@@ -354,20 +377,50 @@ export async function purgeQueue(queueUrl: string): Promise<void> {
 }
 
 /**
- * DLQ から、指定した実行のメッセージの配信対象 ID を受け取る。メッセージは消さない。
+ * イベントソースマッピングを有効・無効にし、切り替わるまで待つ。
+ * 切り替えは非同期で、API が返った時点ではまだ Consumer がメッセージを受け取りうるため、状態を見て待つ。
  *
- * @param dlqUrl - DLQ の URL
+ * @param uuid - イベントソースマッピングの UUID
+ * @param enabled - 有効にするなら true
+ * @returns 切り替わったら解決する
+ * @throws {Error} 待っても切り替わらなかった場合
+ */
+export async function setEventSourceEnabled(
+  uuid: string,
+  enabled: boolean,
+): Promise<void> {
+  await lambda.send(
+    new UpdateEventSourceMappingCommand({ UUID: uuid, Enabled: enabled }),
+  );
+  const expected = enabled ? "Enabled" : "Disabled";
+  await pollUntil(
+    async () =>
+      (await lambda.send(new GetEventSourceMappingCommand({ UUID: uuid })))
+        .State,
+    (state) => state === expected,
+    60_000,
+    1_000,
+  );
+}
+
+/**
+ * キューから、指定した実行のメッセージの配信対象 ID を受け取る。メッセージは消さない。
+ *
+ * @param queueUrl - キュー（DLQ を含む）の URL
  * @param executionName - 実行名
  * @returns 受け取ったメッセージの配信対象 ID（0 件なら空配列）
  */
-export async function receiveDlqRecipientIds(
-  dlqUrl: string,
+export async function receiveRecipientIds(
+  queueUrl: string,
   executionName: string,
 ): Promise<string[]> {
   const { Messages = [] } = await sqs.send(
     new ReceiveMessageCommand({
-      QueueUrl: dlqUrl,
+      QueueUrl: queueUrl,
       MaxNumberOfMessages: 10,
+      // 短いポーリングは一部のサーバーしか見ず、メッセージがあっても 0 件を返しうる。
+      // 「無い」ことの確認にも使うため、ロングポーリングにする
+      WaitTimeSeconds: 1,
       // 受け取ったメッセージをすぐ見える状態に戻し、次のポーリングでも同じものを受け取れるようにする
       VisibilityTimeout: 0,
     }),

@@ -6,9 +6,10 @@ import {
   findStubLogs,
   pollUntil,
   purgeQueue,
-  receiveDlqRecipientIds,
+  receiveRecipientIds,
   resolveResources,
   runExecution,
+  setEventSourceEnabled,
   sleep,
 } from "./helpers/localstack";
 import type { DeployedResources } from "./helpers/localstack";
@@ -43,6 +44,8 @@ beforeAll(async () => {
   recipientIds = (await new MySqlStub().findAll())
     .map((recipient) => recipient.recipientId)
     .sort();
+  // 前回の IT が enqueue のケースの途中で止まると、Consumer が止まったまま残るため戻す
+  await setEventSourceEnabled(resources.consumerEventSourceUuid, true);
   // 前回の中断した IT・手動実行が残したメッセージは、同じグループの今回のメッセージを止めるため消す
   await purgeQueue(resources.queueUrl);
   await purgeQueue(resources.dlqUrl);
@@ -88,26 +91,33 @@ describe("バッチの実行（LocalStack）", () => {
     }
   });
 
-  it('failAt: "enqueue": FAILED になり、Slack スタブに実行 ARN と FAILED が出て、メールは送られない', async () => {
+  it('failAt: "enqueue": FAILED になり、Slack スタブに実行 ARN と FAILED が出て、キューにも DLQ にもメッセージが積まれない', async () => {
     const name = `${RUN_ID}-enqueue`;
+    // Consumer が動いていると、積まれたメッセージは数秒で受け取られて消え、キューを見ても空になる。
+    // 積まれたかどうかをキューで確かめるため、このケースの間だけ止める（止めっぱなしは beforeAll で戻す）
+    await setEventSourceEnabled(resources.consumerEventSourceUuid, false);
+    try {
+      const execution = await runExecution(resources.stateMachineArn, name, {
+        failAt: "enqueue",
+      });
 
-    const execution = await runExecution(resources.stateMachineArn, name, {
-      failAt: "enqueue",
-    });
-
-    expect(execution).toMatchObject({
-      status: "FAILED",
-      error: "InjectedFailureError",
-    });
-    expect(await waitForSlackLogs(name)).toEqual([
-      expect.objectContaining({
-        executionArn: execution.executionArn,
+      expect(execution).toMatchObject({
         status: "FAILED",
         error: "InjectedFailureError",
-      }),
-    ]);
-    await sleep(ABSENCE_GRACE_MS);
-    expect(await findStubLogs("consumer", name, "sendgrid")).toEqual([]);
+      });
+      expect(await waitForSlackLogs(name)).toEqual([
+        expect.objectContaining({
+          executionArn: execution.executionArn,
+          status: "FAILED",
+          error: "InjectedFailureError",
+        }),
+      ]);
+      await sleep(ABSENCE_GRACE_MS);
+      expect(await receiveRecipientIds(resources.queueUrl, name)).toEqual([]);
+      expect(await receiveRecipientIds(resources.dlqUrl, name)).toEqual([]);
+    } finally {
+      await setEventSourceEnabled(resources.consumerEventSourceUuid, true);
+    }
   });
 
   it('failAt: "dataSync": FAILED になり、S3 にファイルが残り、BigQuery・Cuenote FC へは書かず、Slack スタブに出る', async () => {
@@ -182,7 +192,7 @@ describe("バッチの実行（LocalStack）", () => {
     const inDlq = new Set<string>();
     await pollUntil(
       async () => {
-        for (const id of await receiveDlqRecipientIds(resources.dlqUrl, name)) {
+        for (const id of await receiveRecipientIds(resources.dlqUrl, name)) {
           inDlq.add(id);
         }
         return inDlq.size;
