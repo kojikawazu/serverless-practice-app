@@ -81,7 +81,7 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 各項目の末尾の → は、満たしたことの根拠（08 のテストケース番号・09 の検証結果）。チェックを付けていない項目は、条件の文言どおりには確かめていない部分が残っており、その部分を担当する issue を示す（2026-10-12 時点）。
 
 - [x] `failAt` なしで実行すると、実行が `SUCCEEDED` になり、配信対象の件数だけメール送信スタブのログが出て、S3 に連携ファイルが 1 つでき、BigQuery / Cuenote FC スタブのログが出る → IT（08 #20）。`dev` でも確認（09「`dev` での検証結果」）
-- [ ] `failAt: "enqueue"` で実行すると、実行が `FAILED` になり、キューにメッセージが積まれず、Slack スタブのログに実行 ARN と状態 `FAILED` が出る → `FAILED`・Slack スタブのログ・メールが送られないことは IT（08 #25）で確認。キューに積まれないことは直接見ていない（#45）
+- [x] `failAt: "enqueue"` で実行すると、実行が `FAILED` になり、キューにメッセージが積まれず、Slack スタブのログに実行 ARN と状態 `FAILED` が出る → IT（08 #25）。キューは、Consumer を止めた状態で直接受信して確かめる
 - [x] `failAt: "dataSync"` で実行すると、実行が `FAILED` になり、S3 に連携ファイルが残り、BigQuery / Cuenote FC スタブのログは出ず、Slack スタブのログが出る → IT（08 #21）。`dev` でも `FAILED` と Slack スタブのログを確認（09「`dev` での検証結果」）
 - [x] `failAt: "consumer"` で実行すると、実行は `SUCCEEDED` のまま、約 3 分後に配信対象の件数のメッセージが DLQ に移り、Slack スタブのログは出ない → IT（08 #22）
 - [x] `failAt` に未定義の値を渡すと、実行が `FAILED` になり、Slack スタブのログが出る → IT（08 #26）

@@ -53,6 +53,7 @@
 | `tsx` | CDK アプリ（TypeScript）をそのまま実行する |
 | `vitest` | テストランナー |
 | `aws-sdk-client-mock` | UT で AWS SDK の呼び出しをモックする |
+| `@aws-sdk/client-sfn` / `@aws-sdk/client-cloudwatch-logs` / `@aws-sdk/client-ssm` / `@aws-sdk/client-lambda` | IT で LocalStack の実行を起動し、ログ・パラメータを読み、Consumer のイベントソースを止める |
 | `@types/aws-lambda` | Lambda のイベント・応答の型（`SQSBatchResponse` 等） |
 | `esbuild` | `NodejsFunction` によるバンドル |
 | `eslint` / `typescript-eslint` / `eslint-plugin-jsdoc` / `eslint-config-prettier` / `prettier` | 静的解析・整形（`typescript.md`） |
