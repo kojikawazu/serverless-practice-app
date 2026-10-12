@@ -247,23 +247,25 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 | 点 | 結果 | `local` での扱い |
 |---|---|---|
 | EventBridge Scheduler がターゲットを定時に起動するか | **起動しない。** `at()` / `rate()` / `cron()`（タイムゾーン指定あり）の Schedule を、デプロイ済みと同じターゲット・ロールで作り 3 分以上待ったが、実行は 0 件で、LocalStack のログにも起動を試みた形跡が無かった。公式ドキュメントにも「モックのみで、スケジュールの実行・ターゲットの起動は再現しない」とある。作成・取得などの API は動くため、デプロイは通る | 実行は `scripts/batch.sh local run` で手動で起動する（Scheduler と同じ `StartExecution` を、入力 `{}` で呼ぶ）。定時の起動は `dev` で確かめる |
-| Step Functions の状態変化イベントが EventBridge rule に届くか | **届く。** `FAILED` と `ABORTED` は rule を経て Slack 通知 Lambda まで届き、`SUCCEEDED` は rule の条件で除外される（いずれも IT で確認。08 #21・#22・#25〜#27）。`TIMED_OUT` も届く（定義を一時的に書き換えて 2 秒でタイムアウトさせ、IT で確認。08 #32）。LocalStack の `TIMED_OUT` では、実行の `error` / `cause` とイベントの `error` / `cause` がどちらも `null` だった。07「エラー」は `States.Timeout` としているが、実 AWS の値は未観測（`dev` で #44 と合わせて確かめる） | IT で確かめる。イベントの日時の項目が本物と違う形（文字列）で届くため、通知 Lambda は日時の項目を検証しない（07「状態変化イベント」・#30） |
+| Step Functions の状態変化イベントが EventBridge rule に届くか | **届く。** `FAILED` と `ABORTED` は rule を経て Slack 通知 Lambda まで届き、`SUCCEEDED` は rule の条件で除外される（いずれも IT で確認。08 #21・#22・#25〜#27）。`TIMED_OUT` も届く（定義を一時的に書き換えて 2 秒でタイムアウトさせ、IT で確認。08 #32）。LocalStack の `TIMED_OUT` では、実行の `error` / `cause` とイベントの `error` / `cause` がどちらも `null` だった。実 AWS でも、実行・通知のどちらにも値は無かった（下記「`dev` での検証結果」） | IT で確かめる。イベントの日時の項目が本物と違う形（文字列）で届くため、通知 Lambda は日時の項目を検証しない（07「状態変化イベント」・#30） |
 
 ### `dev` での検証結果
 
-LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` で確かめた（2026-10-11。#23。08 #23）。
+LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` で確かめた（2026-10-11 に #23。08 #23。2026-10-13 に #44 で定時の Schedule と `TIMED_OUT` を追加。08 #33・#34）。
 
 | 点 | 結果 | 確かめ方 |
 |---|---|---|
-| EventBridge Scheduler がステートマシンを起動するか | **起動する。** 23:09:00（Asia/Tokyo）の予定に対し 23:09:07 に実行が始まり、Schedule に設定した入力がそのまま実行入力になった | 定時の Schedule（`cron(0 9 * * ? *)`）と同じグループ・同じロール・同じターゲットで、1 回だけ起動する Schedule（`at()`、入力 `{"failAt":"dataSync"}`、実行後に自動で削除）を AWS CLI で一時的に作った。定時の Schedule 自体は、設定（式・タイムゾーン・ターゲット・ロール・入力 `{}`）を AWS CLI で読んで確かめ、発火までは待っていない |
+| EventBridge Scheduler がステートマシンを起動するか（1 回限りの Schedule。#23） | **起動する。** 23:09:00（Asia/Tokyo）の予定に対し 23:09:07 に実行が始まり、Schedule に設定した入力がそのまま実行入力になった | 定時の Schedule（`cron(0 9 * * ? *)`）と同じグループ・同じロール・同じターゲットで、1 回だけ起動する Schedule（`at()`、入力 `{"failAt":"dataSync"}`、実行後に自動で削除）を AWS CLI で一時的に作った |
+| 定時の Schedule（`cron`）がステートマシンを起動するか（#44） | **起動する。** 08:05:00（Asia/Tokyo）の予定に対し 08:05:43 に実行が始まり、入力 `{}` で `SUCCEEDED` になった。メール送信スタブ 3 件・データ連携のログがそろい、Slack スタブのログは出ていなかった（終了の約 5 秒後に 1 回見ただけで、一定時間は待っていない。`SUCCEEDED` は rule のイベントパターンで除外される）。実行名は Scheduler が付ける UUID（例: `d56acd67-9cb6-4a25-962d-bb6d38fc8890`）で、06「入力バリデーション」の `executionName` の制約を通った | デプロイした定時の Schedule の式だけを、AWS CLI（`update-schedule`）で `cron(5 8 * * ? *)` に一時的に変えた。タイムゾーン・ターゲット・ロール・入力・`FlexibleTimeWindow`（`OFF`）は `get-schedule` で読んだ値のまま渡した。**式 `cron(0 9 * * ? *)` そのものの発火は見ていない**（時・分のほかは同じ式）。確認後にスタックごと削除したため、式は戻していない |
 | `FAILED` の状態変化イベントで通知が出るか | **出る。** 上の実行が DataSync の注入エラーで Retry されずに `FAILED` になり、Slack スタブのログに実行 ARN・状態 `FAILED`・エラー名が出た。日時の項目の形が LocalStack と違う実 AWS（07「状態変化イベント」）でも、通知は落ちなかった（届いたイベントの日時そのものは観測していない） | `scripts/batch.sh dev logs <実行名>` で 4 つの Lambda のログを確かめた |
+| `TIMED_OUT` の状態変化イベントで通知が出るか・`error` / `cause` の値（#44） | **出る。値は無い。** 実行は 2 秒で `TIMED_OUT` になり、Slack スタブのログに実行 ARN・状態 `TIMED_OUT`・`error: null`・`cause: null` が出た。`describe-execution` の結果には `error` / `cause` の項目そのものが無く、`States.Timeout` は実行履歴の最後のイベント（`ExecutionTimedOut`）の `error` にだけ出た | IT（08 #32）と同じ手順を AWS CLI で行った。定義の先頭に 10 秒の Wait ステートを足して `TimeoutSeconds` を 2 にし、`scripts/batch.sh dev run` で実行し、終わったら元の定義に戻した。戻した定義が書き換える前と一致することも確かめた。通知 Lambda は値が `null` でも項目が無くても `null` を出す（03「Slack 通知 Lambda」）ため、イベントの `error` / `cause` が `null` なのか項目ごと無いのかは区別していない |
 
 あわせて `failAt` なしの実行（`scripts/batch.sh dev run`）が `SUCCEEDED` になり、メール送信スタブ 3 件・S3 の連携ファイル・BigQuery / Cuenote FC スタブのログがそろい、Slack スタブのログが出ないことも確かめた。
 
-確認の後、CDK → Terraform の順にエラーなく削除でき、`serverless-practice-app-dev-*` のリソース（スタック・Lambda・ステートマシン・Schedule・rule・ロググループ・IAM ロール・SQS・SSM パラメータ・exports バケット）が 0 件で、state のリソースも 0 件になることを確かめた。次の 2 つは CDK → Terraform の削除では消えず、残っている。
+確認の後、CDK → Terraform の順にエラーなく削除でき、`serverless-practice-app-dev-*` のリソース（スタック・Lambda・ステートマシン・Schedule・rule・ロググループ・IAM ロール・SQS・SSM パラメータ・exports バケット）が 0 件で、state のリソースも 0 件になることを確かめた（#23・#44 とも同じ結果）。次の 2 つは CDK → Terraform の削除では消えず、残っている。
 
 - state バケット `serverless-practice-app-tfstate`: Terraform では管理しない（上記「Terraform の state」）。再デプロイ時にそのまま使う
-- CDK のブートストラップ（`CDKToolkit` スタック）: `cdk destroy` では消えない。アカウント・リージョン単位で 1 つの作業用リソースで、消すかどうかは未決定。消す場合は、スタックが持つアセット用の S3 バケットを空にしてからスタックを削除する（バケットに中身があるとスタックの削除が失敗する）
+- CDK のブートストラップ（`CDKToolkit` スタック）: `cdk destroy` では消えない。アカウント・リージョン単位で 1 つの作業用リソースで、消すかどうかは未決定（#47）。消す場合は、スタックが持つアセット用の S3 バケットを空にしてからスタックを削除する（バケットに中身があるとスタックの削除が失敗する）
 
 ## CI とマージの条件
 
