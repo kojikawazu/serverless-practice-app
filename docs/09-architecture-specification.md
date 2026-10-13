@@ -11,6 +11,7 @@
 - [ローカル開発セットアップ](#ローカル開発セットアップ)
 - [デプロイ](#デプロイ)
 - [CI とマージの条件](#ci-とマージの条件)
+- [LMI（Lambda Managed Instances）](#lmilambda-managed-instances)
 - [将来構成](#将来構成)
 
 ## 技術スタック
@@ -234,9 +235,9 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 
 ### 費用
 
-常時課金のリソースは作らない。
+常時課金のリソースは作らない。存在する間は課金されるもの（LMI の EC2）は、検証の間だけ作る（01「制約・前提」・「LMI（Lambda Managed Instances）」）。
 
-- **VPC・NAT Gateway は作らない**: 外部接続はすべてスタブなので、Lambda から外部へ出る経路が要らない。NAT Gateway は時間課金のため、置くとデモを止めている間も費用がかかる
+- **VPC・NAT Gateway は作らない**: 外部接続はすべてスタブなので、Lambda から外部へ出る経路が要らない。NAT Gateway は時間課金のため、置くとデモを止めている間も費用がかかる。LMI の実装（#63）では、キャパシティプロバイダにサブネットが要るため、パブリックサブネットだけの VPC を作る（NAT Gateway は作らない）
 - 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
 - 試し終えたら CDK → Terraform の順に削除する
 - 削除後も残る 2 つ（state バケットと CDK のブートストラップ）は、中身の保管料だけがかかる。どちらも量が小さく、残す理由がある（下記「`dev` での検証結果」の削除後に残るもの）
@@ -297,9 +298,119 @@ gh api repos/kojikawazu/serverless-practice-app/rulesets \
       --jq '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context'
 ```
 
+## LMI（Lambda Managed Instances）
+
+**設計（2026-10-13。#48）。実装は #63 で行い、それまで本節の構成は存在しない。** 学習目的で、データ連携 Lambda を LMI で動かし、Lambda の 15 分の上限を越える実行を Step Functions から待つ（01「スコープ」）。今の処理に 15 分を超えるものは無く、必要だからではなく、動かして確かめるために入れる。
+
+前提の事実は公式ドキュメントで確かめた（2026-10-13）。主なものは次のとおり。
+
+- LMI の関数は、**非同期の呼び出し**とイベントソースマッピングに限り最大 90 分（5,400 秒）まで動ける。同期の呼び出しと初期化は 15 分のまま（[Lambda のクォータ](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)）。タイムアウトしてもコードは強制停止されない
+- Step Functions の `lambda:invoke` は、`.waitForTaskToken` を付けても既定は同期で呼ぶ。`InvocationType: "Event"` で非同期にできる（[Step Functions の Lambda 連携](https://docs.aws.amazon.com/step-functions/latest/dg/connect-lambda.html)）
+- 関数の**バージョンを公開した時点**で、既定では EC2 インスタンス 3 台・実行環境 3 つが起動する。インスタンスを確実に消す手段はキャパシティプロバイダの削除だけで、関数のバージョンが紐づいている間は削除できない（[スケーリング](https://docs.aws.amazon.com/lambda/latest/dg/lambda-managed-instances-scaling.html)・[キャパシティプロバイダ](https://docs.aws.amazon.com/lambda/latest/dg/lambda-managed-instances-capacity-providers.html)）
+- 料金は EC2 のオンデマンド料金に 15% の管理料を足したもの。実行時間の課金は無い（[料金](https://aws.amazon.com/lambda/pricing/)）
+- キャパシティプロバイダにはサブネットが必須。CloudWatch Logs を含む AWS API へは、パブリックサブネットと IGW・VPC エンドポイント・NAT Gateway のいずれかの経路が要る（[ネットワーク](https://docs.aws.amazon.com/lambda/latest/dg/lambda-managed-instances-networking.html)）
+- 関数は最小 2 GB・1 vCPU。1 つの実行環境で複数の呼び出しを並行に処理する（Node.js はグローバル状態・`/tmp` を呼び出し間で共有する）
+- IaC: CDK は v2.231.0 から、Terraform の AWS provider は 6.24.0 からキャパシティプロバイダを扱える。**Terraform は関数のタイムアウトを今も 900 秒までしか設定できない**（関数は CDK 側に置くため影響しない）。LocalStack は 4.12 から API に対応するが、EC2 は起動せず、並行処理と IAM は再現しない
+
+### 処理時間ごとの実行先
+
+処理を足すときは、1 回の実行にかかる時間で実行先を決める。
+
+| 処理時間 | 実行先 |
+|---|---|
+| 15 分未満 | 通常の Lambda |
+| 15〜90 分 | LMI（非同期の呼び出し + `.waitForTaskToken`。下記） |
+| 90 分超 | **不可**。処理を分割し、1 回を 90 分以内に収める |
+
+### 対象の段と呼び出し方
+
+LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で長くなりうる段で、投入・Consumer・通知は今のまま通常の Lambda に置く。
+
+`DataSync` タスクは、`lambda:invoke.waitForTaskToken` に `InvocationType: "Event"` を付けて非同期で呼ぶ。関数は処理を終えたら、自分で結果を Step Functions へ返す。
+
+| 場面 | 関数がすること | ステートマシンから見た結果 |
+|---|---|---|
+| 成功 | `SendTaskSuccess`（出力は今の戻り値 `{ exported, s3Key }`） | 次へ進み `SUCCEEDED` |
+| 想定した失敗（`ValidationError` / `InjectedFailureError` ほか） | `SendTaskFailure`。`error` にエラー名、`cause` に今の Lambda と同じ形の JSON（`errorType` / `errorMessage`）を渡す | `FAILED`。`Retry` はエラー名で今と同じく判定する（07「エラー」の契約を保つ） |
+| 結果を返せない（タスクトークンが無い・`SendTask*` が失敗した・関数が途中で落ちた） | エラーログを 1 行出して終える | ハートビートかタスクのタイムアウトで `FAILED`（`States.HeartbeatTimeout` / `States.Timeout`）。待ち続けず、判定不能を成功にも丸めない |
+
+- Lambda 側の非同期呼び出しの再試行（既定 2 回）は **0 にする**。再試行すると同じタスクトークンで処理が二重に走り、S3・スタブへの書き込みが重なる。再試行は今と同じく Step Functions の `Retry`（呼び出しそのものの一時的なエラーだけ）に任せる
+- 関数は、待っている間 60 秒ごとに `SendTaskHeartbeat` を送る
+- `.waitForTaskToken` と `InvocationType: "Event"` の**併用は、公式の例が見つからなかった**（禁止する記述も無い）。設計の要なので、実装の最初に LocalStack と `dev` で確かめる
+
+### 15 分を超える実行の再現
+
+実行入力に検証用の `holdSeconds`（整数、0〜1,200。省略時は 0）を足す。データ連携 Lambda は、スタブへの書き込みを終えてから結果を返すまでの間、その秒数だけ待つ（待つ間もハートビートを送る）。`dev` では `holdSeconds: 960`（16 分）で、15 分を超えて `SUCCEEDED` になることを確かめる。上限 1,200 秒は、関数のタイムアウトに収めつつ、待つ分の EC2 料金を抑えるための値。
+
+`failAt` と同じく失敗・遅延の注入であり、定時起動（入力 `{}`）では使わない。入力の検証は 06 に足す。
+
+### タイムアウト
+
+| 対象 | 今 | 変更後 | 理由 |
+|---|---|---|---|
+| データ連携 Lambda | 30 秒 | 1,800 秒 | `holdSeconds` の上限（1,200 秒）に処理の余裕を足す。15 分を超えるのは LMI だからできる |
+| `DataSync` タスクのタイムアウト | 無し（関数のタイムアウトが上限） | 1,860 秒 | 関数のタイムアウトに 60 秒の余裕を足す。LMI はタイムアウトしてもコードを止めないため、ステートマシン側で必ず打ち切る |
+| `DataSync` タスクのハートビート | 無し | 300 秒 | 関数は 60 秒ごとに送る。非同期の呼び出しでは呼び出した直後から数え始める |
+| ステートマシン | 5 分 | 40 分 | 投入（Retry を含む）と `DataSync` のタイムアウトの合計より長くする |
+
+### ネットワーク
+
+パブリックサブネットと IGW の経路にする。公式が「最も単純で安く、開発・検証向け」とする形で、時間課金の NAT Gateway・VPC エンドポイントを作らない。
+
+- VPC 1 つ、パブリックサブネットを 3 つ（AZ ごと。既定の 3 台が AZ に分かれて起動するため）、IGW、`0.0.0.0/0` を IGW へ向けるルートテーブル
+- セキュリティグループは受信なし、送信は HTTPS（443）のみ
+- インスタンスにパブリック IP が自動で付くか（サブネットの自動割り当てで足りるか）と、その料金は公式で確かめられなかった。`dev` で確かめる
+
+### キャパシティプロバイダと関数の設定
+
+| 設定 | 値 | 理由 |
+|---|---|---|
+| アーキテクチャ | arm64 | 今の Lambda と同じ。東京で最安の `m6g.large` を使える |
+| 使うインスタンスタイプ | `m6g.large`・`m7g.large` に絞る | 費用の上限を読めるようにする（絞らないと選ばれるタイプが保証されない） |
+| vCPU の上限 | 6 | `.large`（2 vCPU）3 台分。想定外の拡大で費用が膨らまないようにする |
+| 関数のメモリ | 2,048 MB（vCPU あたり 2 GiB、1 vCPU） | LMI の最小構成 |
+| 関数の実行環境数 | 最小 1・最大 1 を試す | 既定（最小 3）より台数を減らせるかを `dev` で確かめる。できなければ既定のまま記録する |
+
+データ連携 Lambda は、モジュールに持つのが状態を持たない S3 クライアントと読み取り専用の定数だけで、並行処理で壊れるグローバル状態は無い（2026-10-13 に確認）。
+
+実行が長くなることへの注意:
+
+- **冪等性**: 1 回の実行が長いほど、途中で失敗して `Retry` や手動の再実行で同じ処理が繰り返される影響が大きくなる。データ連携は同じ実行名なら同じ S3 キーに上書きする（05「連携ファイル」）が、スタブ（BigQuery・Cuenote FC）への書き込みは重なる。補償処理を持たない方針（03「データ連携 Lambda」）は変えない
+- **認証情報・接続**: 実行が長い間に、実行ロールの一時的な認証情報や SDK の接続が切れないかは確かめていない。`holdSeconds: 960` の実行の最後に `SendTaskSuccess` が通ることで確かめる
+
+### IaC の責務
+
+| リソース | 置き場所 | 理由 |
+|---|---|---|
+| VPC・サブネット・IGW・ルートテーブル・セキュリティグループ | Terraform | 土台（「IaC の責務分担」） |
+| キャパシティプロバイダとそのオペレーター用 IAM ロール | Terraform。ARN を SSM で CDK に渡す | 他の IAM ロールと同じく土台に置く。削除順（CDK → Terraform）が「関数のバージョンを先に消し、その後プロバイダを消す」と一致し、プロバイダの削除でインスタンスが確実に消える |
+| データ連携 Lambda のキャパシティプロバイダへの紐付け・タイムアウト（1,800 秒）・非同期の再試行 0 | CDK | 関数は CDK が持つ。Terraform は 900 秒を超えるタイムアウトを設定できない |
+| `DataSync` タスクの呼び出し方・タイムアウト・ハートビート | CDK | ステートマシンは CDK が持つ |
+
+`local` にも同じ IaC をデプロイする（01「制約・前提」）。LocalStack はキャパシティプロバイダを受け付けるが EC2 を起動しないため、関数は通常の Lambda と同じように動く。そのため IT で、非同期の呼び出しと `SendTask*` で結果を返す流れを確かめられる。`tflocal` がキャパシティプロバイダを扱えるか、CI の LocalStack のプランで使えるかは、実装の最初に確かめる。扱えなければ、`local` だけプロバイダを紐付けない分岐を置き、その理由を本節に記録する。
+
+### 費用と消し忘れへの備え
+
+- 動かしている間だけ課金される。`m6g.large` 3 台なら、EC2 と管理料を合わせて約 $0.34/時（東京、2026-10-12 時点の単価）。`dev` の 1 回の検証（約 1 時間）で約 $0.35 を見込む
+- `scripts/stack.sh dev up` で作り、確かめたら `scripts/stack.sh dev down` で消す、という今の運用に乗せる。削除後は何も課金されない（state バケット・`CDKToolkit` の保管料を除く。「`dev` での検証結果」）
+- 消し忘れると 1 日で約 $8 かかる。**AWS Budgets** で月の予算アラートを置き、超えたらメールで知らせる。予算はアカウント単位で、`down` で消えては困るため、`dev` の Terraform では管理しない。state バケットと同じく冪等なスクリプトで作る。通知先のメールアドレスは環境変数で渡し、リポジトリに書かない。予算額・閾値は実装時に決める。請求データの反映には時間がかかるため、気づけるのは数時間後になる
+
+### テスト
+
+| レベル | 確かめること |
+|---|---|
+| UT（handler） | 成功で `SendTaskSuccess`、想定した失敗で `SendTaskFailure`（エラー名・`cause` の形）を呼ぶ。`holdSeconds` の間にハートビートを送る。`SendTask*` が失敗したらエラーログを出す。`holdSeconds` の境界（0・1,200・範囲外・小数） |
+| UT（CDK） | `DataSync` が `.waitForTaskToken` と `InvocationType: "Event"` で呼ばれる。タスクのタイムアウト・ハートビート、関数のタイムアウト・キャパシティプロバイダの紐付け・非同期の再試行 0 |
+| IT（LocalStack） | 今のケース（08 #20〜#27・#32）が、結果の返し方を変えても通る。短い `holdSeconds` で `SUCCEEDED` になる |
+| 手動（`dev`） | 起動したインスタンスの台数・タイプ・パブリック IP。通常の実行と `failAt: "dataSync"` の結果と通知。`holdSeconds: 960` で 15 分を超えて `SUCCEEDED` になる。削除後にインスタンス・プロバイダ・VPC が 0 件になる |
+
+### 実装時に更新するドキュメント
+
+01（スコープ・制約は本設計で更新済み）に加え、02（受け入れ条件）・03（ステートマシン・データ連携 Lambda）・04（タイムアウト・メモリ）・05（SSM パラメータ）・06（`holdSeconds`・タスクトークンの検証、IAM）・07（タスク入力・エラーの契約）・08（テストケース）・09（構成図・責務分担・費用・本節の「設計」の表記）・10（命名）・README（予算スクリプト・環境変数）。
+
 ## 将来構成
 
 元資料の構成のうち、デモでは省いたもの。必要になったら追加する。
 
-- VPC / Security Group / NAT Gateway（実在の外部 SaaS へ接続する場合に必要）
-- 元資料「改善提案の候補」: DLQ アラーム、決定的な `MessageDeduplicationId`、Consumer の冪等化、`waitForTaskToken`
+- プライベートサブネット / NAT Gateway（実在の外部 SaaS へ接続する場合に必要）。LMI 用の VPC はパブリックサブネットだけで作る（「LMI」）
+- 元資料「改善提案の候補」: DLQ アラーム、決定的な `MessageDeduplicationId`、Consumer の冪等化、投入を `waitForTaskToken` 方式に変えて Consumer の結果を返すこと（データ連携の LMI 化で使う `waitForTaskToken` とは別）
