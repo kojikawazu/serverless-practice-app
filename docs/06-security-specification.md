@@ -68,6 +68,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | 秘匿値 | `LOCALSTACK_AUTH_TOKEN` のみ。手元の `.env`（Git 管理外）に置き、変数名だけを `.env.example` で共有する。CI ではリポジトリのシークレットから `it` ジョブの LocalStack を起動するステップにだけ渡す（08）。fork からの PR には渡らない（09「CI とマージの条件」）。ほかに持つことになったら `dev` は Secrets Manager、手元は `.env` に置く（`security.md`） |
 | S3 バケット | パブリックアクセスを全面ブロック。SSE-S3 で暗号化。バケットポリシーで HTTPS 以外のアクセスを拒否（`aws:SecureTransport`） |
 | SQS キュー・DLQ | SQS 管理の鍵で暗号化（SSE-SQS） |
+| 予算アラートの通知先 | メールアドレス（個人情報）は `.env`（Git 管理外）の `BUDGET_ALERT_EMAIL` にだけ置き、`.env.example` には変数名だけを置く。スクリプトはその 1 行だけを読み（`.env` を source しない）、画面には先頭の 1 文字とドメインだけを出す（09「予算アラート」） |
 | Terraform の state | 09「Terraform の state」と `iac.md` に従う。秘匿値を含まないが、バケットはバージョニング有効・公開禁止 |
 
 ## 脆弱性対策

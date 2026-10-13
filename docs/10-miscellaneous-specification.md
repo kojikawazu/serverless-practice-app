@@ -41,6 +41,8 @@
 | Lambda の `<name>` | handler のファイル名と一致させる（kebab-case） | `functions/src/handlers/data-sync.ts` → `data-sync` |
 | エラークラス | `<内容>Error`。`name` プロパティをクラス名と一致させる（Step Functions がこの名前で判定するため） | `InjectedFailureError` |
 
+**予算（AWS Budgets）も例外**: アカウント単位のため、ステージ名を入れず `serverless-practice-app-daily-cost` とする（09「予算アラート」）。
+
 **S3 バケット名は例外**: バケット名は全アカウントで一意のため、`serverless-practice-app-<stage>-exports-<アカウント ID>` とする。
 
 ## 参照資料・ライブラリ
