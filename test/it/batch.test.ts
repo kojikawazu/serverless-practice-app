@@ -196,11 +196,13 @@ describe("バッチの実行（LocalStack）", () => {
     }
 
     expect(execution.status).toBe("TIMED_OUT");
-    // error / cause は確かめない。LocalStack では null だが、実 AWS の値は観測していない（docs/09「LocalStack での検証結果」）
+    // タイムアウトした実行は error / cause を持たない。実 AWS でも同じ（docs/09「`dev` での検証結果」）
     expect(await waitForSlackLogs(name)).toEqual([
       expect.objectContaining({
         executionArn: execution.executionArn,
         status: "TIMED_OUT",
+        error: null,
+        cause: null,
       }),
     ]);
   });
