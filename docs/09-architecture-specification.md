@@ -45,7 +45,7 @@
 │   │   └── lib/          # 入力検証・構造化ロガーなどの共通処理
 │   └── test/
 ├── infra/
-│   ├── terraform/        # 土台（IAM・SQS・S3・Schedule group・SSM 出力）
+│   ├── terraform/        # 土台（IAM・SQS・S3・Schedule group・SSM 出力。dev だけ LMI の VPC・キャパシティプロバイダ）
 │   │   └── envs/         # <stage>.tfvars（変数）/ <stage>.s3.tfbackend（state のキー）。秘匿値は置かない
 │   └── cdk/              # アプリ（Lambda・Step Functions・Schedule・EventBridge rule）。bin/（入口）・lib/（スタック）・test/
 ├── scripts/              # 検査・デプロイ補助スクリプト
@@ -62,6 +62,7 @@
 | SQS FIFO + DLQ | Terraform | `maxReceiveCount: 3`。可視性タイムアウトは Consumer のタイムアウトの 6 倍 |
 | S3 バケット（データ連携の出力先） | Terraform | 元資料の表に無いが、状態を持つ土台として Terraform に置く |
 | Schedule group | Terraform | |
+| LMI の VPC・キャパシティプロバイダ | Terraform | `dev` だけ作る。関数の紐付けは CDK（「LMI」の「IaC の責務」） |
 | SSM パラメータ | Terraform | 上記の ARN・名前・URL を `/serverless-practice-app/<stage>/...` に書き出す |
 | Lambda 4 種 | CDK | |
 | Step Functions | CDK | |
@@ -97,7 +98,7 @@ BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（
 
 ### Step Functions の流れ
 
-`Enqueue（投入）→ DataSync（データ連携）` を順に実行する。Lambda タスクには一時的なエラー（`Lambda.ServiceException` 等）のみ `Retry` を付ける。Consumer は SQS イベントソースで起動し、Step Functions の外で動く（元資料の「コレオグラフィ」部分）。
+`Enqueue（投入）→ DataSync（データ連携）` を順に実行する。Lambda タスクには一時的なエラー（`Lambda.ServiceException` 等）のみ `Retry` を付ける。`DataSync` は非同期で呼び、データ連携 Lambda がタスクトークンで結果を返すまで待つ（「LMI」）。Consumer は SQS イベントソースで起動し、Step Functions の外で動く（元資料の「コレオグラフィ」部分）。
 
 ## システム構成図
 
@@ -119,6 +120,7 @@ flowchart LR
         S3[(S3)]
         IAM[IAM ロール]
         SSM[SSM パラメータ]
+        CP[キャパシティプロバイダ・VPC<br/>dev のみ]
     end
     subgraph STUB["スタブ"]
         SG[SendGrid]
@@ -131,7 +133,9 @@ flowchart LR
     SFN --> ENQ --> Q --> CON --> SG
     ENQ -. 配信対象の取得 .-> EXT
     Q -. 3 回失敗 .-> DLQ
-    SFN --> SYNC
+    SFN -- 非同期 + waitForTaskToken --> SYNC
+    SYNC -. SendTask* .-> SFN
+    SYNC -. dev は LMI で動く .- CP
     SYNC --> S3
     SYNC --> EXT
     SFN -. FAILED / TIMED_OUT / ABORTED .-> RULE --> NOTIFY --> SLACK
@@ -237,7 +241,8 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 
 常時課金のリソースは作らない。存在する間は課金されるもの（LMI の EC2）は、検証の間だけ作る（01「制約・前提」・「LMI（Lambda Managed Instances）」）。
 
-- **VPC・NAT Gateway は作らない**: 外部接続はすべてスタブなので、Lambda から外部へ出る経路が要らない。NAT Gateway は時間課金のため、置くとデモを止めている間も費用がかかる。LMI の実装（#63）では、キャパシティプロバイダにサブネットが要るため、パブリックサブネットだけの VPC を作る（NAT Gateway は作らない）
+- **NAT Gateway は作らない**: 外部接続はすべてスタブなので、Lambda から外部へ出る経路が要らない。NAT Gateway は時間課金のため、置くとデモを止めている間も費用がかかる。VPC は LMI のキャパシティプロバイダにサブネットが要るため `dev` だけに作り、パブリックサブネットと IGW の経路にする（VPC・サブネット・IGW は無料）
+- **LMI の EC2 は存在する間だけ課金される**: `dev` の検証の間だけ作り、確かめたら消す（「LMI」の「費用と消し忘れへの備え」）
 - 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
 - 試し終えたら CDK → Terraform の順に削除する
 - 削除後も残る 2 つ（state バケットと CDK のブートストラップ）は、中身の保管料だけがかかる。どちらも量が小さく、残す理由がある（下記「`dev` での検証結果」の削除後に残るもの）
@@ -284,7 +289,7 @@ main へは PR を通してしか入れず、次の必須チェックがすべ�
 | `check`（型検査・Lint・整形・UT） / `terraform` / `it` | `ci.yml` | skipped（成功として扱われる） |
 
 - **`changes` も必須にする。** `check` などは `changes` の結果で動くかを決めるため、`changes` が落ちると skipped になり、skipped は必須チェックを通る。判定が落ちたまま重い検査を飛ばして緑にしないよう、判定そのものを必須にする
-- **ブランチを最新にしてからのマージは求めない**（ruleset の `strict` は `false`）。PR を 1 本ずつ順に出すため、毎回 rebase して IT（約 10 分）を回し直す手間に見合わない
+- **ブランチを最新にしてからのマージは求めない**（ruleset の `strict` は `false`）。PR を 1 本ずつ順に出すため、毎回 rebase して IT（約 12 分）を回し直す手間に見合わない
 - **承認は 0 件でよい。** 一人で開発するため。マージは人が行う（`git.md`）。管理者も ruleset を迂回できない（bypass なし）
 - **fork からの PR は `it` が落ちてマージできない。** リポジトリのシークレット（`LOCALSTACK_AUTH_TOKEN`）は fork の PR に渡らない。スキップして緑にはしない（`ci.yml` の `it`）。取り込むときは手元で IT を通す
 - ジョブ名を変えると、必須チェックが来ない結果を待ち続けて PR が `pending` のまま止まる。ジョブ名を変えたら ruleset も直す
@@ -300,7 +305,7 @@ gh api repos/kojikawazu/serverless-practice-app/rulesets \
 
 ## LMI（Lambda Managed Instances）
 
-**設計（2026-10-13。#48）。実装は #63 で行い、それまで本節の構成は存在しない。** 学習目的で、データ連携 Lambda を LMI で動かし、Lambda の 15 分の上限を越える実行を Step Functions から待つ（01「スコープ」）。今の処理に 15 分を超えるものは無く、必要だからではなく、動かして確かめるために入れる。
+**設計は 2026-10-13（#48）、実装は #63。** `dev` での動作の確認は #66 で行い、結果は「`dev` での検証結果」に記録する。設計から実装で変えた点は「実装で設計から変えた点」にまとめる。学習目的で、データ連携 Lambda を LMI で動かし、Lambda の 15 分の上限を越える実行を Step Functions から待つ（01「スコープ」）。今の処理に 15 分を超えるものは無く、必要だからではなく、動かして確かめるために入れる。
 
 前提の事実は公式ドキュメントで確かめた（2026-10-13）。主なものは次のとおり。
 
@@ -344,12 +349,14 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 
 `failAt` と同じく失敗・遅延の注入であり、定時起動（入力 `{}`）では使わない。入力の検証は 06 に足す。
 
+上限 1,200 秒は `dev`（LMI）に合わせた値で、`local` でも同じ範囲を受け付ける。`local` の関数は 900 秒でタイムアウトするため、900 秒近くまで待つ値では結果を返せず、`DataSync` のタイムアウト（960 秒）で `FAILED`（`States.Timeout`）になる。`local` で使うのは IT の短い値（61 秒）だけにする。
+
 ### タイムアウト
 
 | 対象 | 今 | 変更後 | 理由 |
 |---|---|---|---|
-| データ連携 Lambda | 30 秒 | 1,800 秒 | `holdSeconds` の上限（1,200 秒）に処理の余裕を足す。15 分を超えるのは LMI だからできる |
-| `DataSync` タスクのタイムアウト | 無し（関数のタイムアウトが上限） | 1,860 秒 | 関数のタイムアウトに 60 秒の余裕を足す。LMI はタイムアウトしてもコードを止めないため、ステートマシン側で必ず打ち切る |
+| データ連携 Lambda | 30 秒 | 1,800 秒（`local` は 900 秒） | `holdSeconds` の上限（1,200 秒）に処理の余裕を足す。15 分を超えるのは LMI だからできる。LMI を使わない `local` は通常の Lambda の上限 |
+| `DataSync` タスクのタイムアウト | 無し（関数のタイムアウトが上限） | 1,860 秒（`local` は 960 秒） | 関数のタイムアウトに 60 秒の余裕を足す。LMI はタイムアウトしてもコードを止めないため、ステートマシン側で必ず打ち切る |
 | `DataSync` タスクのハートビート | 無し | 300 秒 | 関数は 60 秒ごとに送る。非同期の呼び出しでは呼び出した直後から数え始める |
 | ステートマシン | 5 分 | 40 分 | 投入（Retry を含む）と `DataSync` のタイムアウトの合計より長くする |
 
@@ -367,7 +374,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 |---|---|---|
 | アーキテクチャ | arm64 | 今の Lambda と同じ。東京で最安の `m6g.large` を使える |
 | 使うインスタンスタイプ | `m6g.large`・`m7g.large` に絞る | 費用の上限を読めるようにする（絞らないと選ばれるタイプが保証されない） |
-| vCPU の上限 | 6 | `.large`（2 vCPU）3 台分。想定外の拡大で費用が膨らまないようにする |
+| vCPU の上限 | 12 | API の下限（12）。`.large`（2 vCPU）6 台分。想定外の拡大で費用が膨らまないようにする。設計では 6（3 台分）としたが、API が 12 未満を受け付けなかった |
 | 関数のメモリ | 2,048 MB（vCPU あたり 2 GiB、1 vCPU） | LMI の最小構成 |
 | 関数の実行環境数 | 最小 1・最大 1 を試す | 既定（最小 3）より台数を減らせるかを `dev` で確かめる。できなければ既定のまま記録する |
 
@@ -387,7 +394,9 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 | データ連携 Lambda のキャパシティプロバイダへの紐付け・タイムアウト（1,800 秒）・非同期の再試行 0 | CDK | 関数は CDK が持つ。Terraform は 900 秒を超えるタイムアウトを設定できない |
 | `DataSync` タスクの呼び出し方・タイムアウト・ハートビート | CDK | ステートマシンは CDK が持つ |
 
-`local` にも同じ IaC をデプロイする（01「制約・前提」）。LocalStack はキャパシティプロバイダを受け付けるが EC2 を起動しないため、関数は通常の Lambda と同じように動く。そのため IT で、非同期の呼び出しと `SendTask*` で結果を返す流れを確かめられる。`tflocal` がキャパシティプロバイダを扱えるか、CI の LocalStack のプランで使えるかは、実装の最初に確かめる。扱えなければ、`local` だけプロバイダを紐付けない分岐を置き、その理由を本節に記録する。
+`local` にも同じ IaC をデプロイする（01「制約・前提」）。ただし **LMI の部分（VPC・キャパシティプロバイダとそのロール・SSM の `capacity-provider/arn`・関数の紐付け）は `dev` でだけ作る。** 本デモが使う LocalStack の Hobby プランでは LMI の API（`CreateCapacityProvider`）を使えなかったため（2026-10-13 に確認）。条件は Terraform（`lmi.tf` の `stage == "dev"`）と CDK（`LMI_STAGES`）の両方に置き、CDK の UT で `local` では紐付けないことを固定する。
+
+`local` でも `DataSync` の呼び出し方（`.waitForTaskToken` + `InvocationType: "Event"`）・ハートビート・`SendTask*` で結果を返す流れは `dev` と同じで、関数は通常の Lambda として動く。そのため IT で、結果の返し方を変えても今のケースが通ることと、短い `holdSeconds` で `SUCCEEDED` になることを確かめられる（08 #35）。`.waitForTaskToken` と `InvocationType: "Event"` の併用は、LocalStack では動いた。実 AWS では #66 で確かめる。
 
 ### 費用と消し忘れへの備え
 
@@ -403,6 +412,21 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 | UT（CDK） | `DataSync` が `.waitForTaskToken` と `InvocationType: "Event"` で呼ばれる。タスクのタイムアウト・ハートビート、関数のタイムアウト・キャパシティプロバイダの紐付け・非同期の再試行 0 |
 | IT（LocalStack） | 今のケース（08 #20〜#27・#32）が、結果の返し方を変えても通る。短い `holdSeconds` で `SUCCEEDED` になる |
 | 手動（`dev`） | 起動したインスタンスの台数・タイプ・パブリック IP。通常の実行と `failAt: "dataSync"` の結果と通知。`holdSeconds: 960` で 15 分を超えて `SUCCEEDED` になる。削除後にインスタンス・プロバイダ・VPC が 0 件になる |
+
+### 実装で設計から変えた点
+
+実装（#63）で、設計から次の点を変えた・足した。
+
+| 点 | 設計 | 実装 | 理由 |
+|---|---|---|---|
+| LMI を作るステージ | `local` にも作る（扱えなければ分岐） | `dev` だけ | LocalStack の Hobby プランで LMI の API を使えなかった（上記「IaC の責務」） |
+| `local` のデータ連携 Lambda のタイムアウト | 1,800 秒 | 900 秒（タスクは 960 秒） | LMI を使わない関数は 900 秒を超えられない |
+| vCPU の上限 | 6 | 12 | API の下限が 12 |
+| データ連携 Lambda のメモリ | （LMI の最小構成 2,048 MB） | 全ステージで 2,048 MB | `local` と `dev` で関数の設定をそろえ、違いを LMI の紐付けだけにする |
+| AWS SDK | — | データ連携 Lambda だけ、ランタイム同梱の SDK を使わずバンドルに含める | LMI は AWS SDK for JavaScript v3 の 3.933.0 以上を求め、ランタイム同梱の版に頼れない。含めると SDK 内の `require("node:https")` が ESM の出力で `Dynamic require of "node:https" is not supported` になる（LocalStack で確認）ため、出力の先頭で `createRequire` により `require` を用意する |
+| データ連携 Lambda の権限 | （06 に足す） | `states:SendTaskSuccess` / `SendTaskFailure` / `SendTaskHeartbeat`。対象はステートマシン `serverless-practice-app-<stage>-batch` の ARN | タスクトークンで結果を返すため。ステートマシンの ARN に絞っても通ることを実 AWS で確かめた（2026-10-13） |
+| 結果を返せない場合 | エラーログを 1 行出して終える | 環境変数の誤りだけは、ロガーを組み立てられないため投げる。非同期の呼び出しの再試行は 0 のため二重には走らず、ハートビートのタイムアウトで `FAILED` になる | 環境変数はデプロイの誤りで、実行ごとには変わらない |
+| `cause` の長さ | — | エラーメッセージを 4,096 文字で切り詰める | `SendTaskFailure` の `cause` の上限（32,768 文字）に収める |
 
 ### 実装時に更新するドキュメント
 

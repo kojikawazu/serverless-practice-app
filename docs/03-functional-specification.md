@@ -19,11 +19,12 @@
 | ステート | 種類 | 内容 |
 |---|---|---|
 | `Enqueue` | Lambda タスク | 投入 Lambda を呼ぶ。実行入力に実行名を足して渡す（07「タスク入力」） |
-| `DataSync` | Lambda タスク | データ連携 Lambda を呼ぶ。`Enqueue` と同じタスク入力を渡す |
+| `DataSync` | Lambda タスク（`.waitForTaskToken`） | データ連携 Lambda を非同期で呼び、関数がタスクトークンで結果を返すまで待つ。`Enqueue` と同じタスク入力にタスクトークンを足して渡す（07「タスク入力」） |
 
 - 2 つのタスクを順に実行し、両方成功したら `SUCCEEDED` で終える。分岐・並列は持たない
 - 各タスクの `Retry` は一時的なエラー（04「リトライ」）だけを対象にする。注入した失敗・検証エラーはリトライしない
 - `Catch` は付けない。タスクの失敗はそのまま実行の失敗になり、状態変化イベントとして EventBridge へ出る
+- `DataSync` はタイムアウトとハートビートのタイムアウトを持つ（04「パフォーマンス要件」）。関数が結果を返さずに止まっても待ち続けず、`States.Timeout` / `States.HeartbeatTimeout` で失敗にする
 
 ### 投入 Lambda（`enqueue`）
 
@@ -56,17 +57,25 @@ SQS イベントソースから最大 5 件ずつ受け取り、1 件ずつ処�
 
 ### データ連携 Lambda（`data-sync`）
 
-1. 入力を検証する
-2. MySQL スタブから配信対象を取得する
-3. S3 へ連携ファイル（JSON）を書く
-4. `failAt` が `dataSync` なら、ここで注入エラーで失敗する
-5. BigQuery スタブへ書く
-6. Cuenote FC スタブへ書く
-7. 書いた件数と S3 のキーを返す
+ステートマシンから非同期で呼ばれるため、戻り値・例外はステートマシンに届かない。結果は入力のタスクトークンで返す（09「LMI（Lambda Managed Instances）」）。
+
+1. 入力からタスクトークンを取り出す。読めなければ結果を返せないため、エラーログを出して終える
+2. 入力の残りを検証する
+3. MySQL スタブから配信対象を取得する
+4. S3 へ連携ファイル（JSON）を書く
+5. `failAt` が `dataSync` なら、ここで注入エラーで失敗する
+6. BigQuery スタブへ書く
+7. Cuenote FC スタブへ書く
+8. `holdSeconds` があれば、その秒数だけ待つ。60 秒ごとにハートビート（`SendTaskHeartbeat`）を送る
+9. 書いた件数と S3 のキーを `SendTaskSuccess` で返す
 
 書き出しの順序は元資料で未確定のため、本デモでは上記の順に固定する。途中で失敗すると前段の書き込みが残る（元資料のリスク 4）。補償処理（巻き戻し）は持たない。
 
-S3 のキーの日付と `exportedAt` は、同じ時刻（UTC）から作る。失敗したときは、投入 Lambda と同じくエラーログを 1 行出してから投げ直す。
+S3 のキーの日付と `exportedAt` は、同じ時刻（UTC）から作る。
+
+2〜9 で失敗したときは、投入 Lambda と同じくエラーログを 1 行出してから、`SendTaskFailure` で失敗を返す（エラー名と `cause` の形は 07「エラーハンドリング」）。**例外は投げない。** 非同期の呼び出しで投げると、受け取るのは Lambda の再試行だけで、同じタスクトークンで処理が二重に走るため（非同期の呼び出しの再試行も 0 にしている）。ハートビート・`SendTaskSuccess` の失敗も同じく `SendTaskFailure` で返し、`SendTaskFailure` 自体が失敗したらエラーログを出して終える。そのときはステートマシン側のタイムアウトで `FAILED` になる。
+
+環境変数の誤りだけは、ロガーを組み立てられないため例外を投げる。デプロイの誤りで、結果はハートビートのタイムアウトで `FAILED` になる。
 
 ### Slack 通知 Lambda（`notify-slack`）
 
@@ -96,8 +105,9 @@ sequenceDiagram
     ENQ-->>SFN: 件数
     Q-)CON: イベントソース（最大 5 件）
     Note over CON: Step Functions の外で動く。<br/>失敗は通知に乗らず DLQ へ
-    SFN->>SYNC: Invoke（実行名, failAt）
-    SYNC-->>SFN: 件数・S3 キー
+    SFN-)SYNC: Invoke（非同期。実行名, failAt, holdSeconds, タスクトークン）
+    SYNC-)SFN: SendTaskHeartbeat（holdSeconds の間、60 秒ごと）
+    SYNC-)SFN: SendTaskSuccess（件数・S3 キー）/ SendTaskFailure
     SFN-)RULE: 状態変化（FAILED / TIMED_OUT / ABORTED のみ）
     RULE-)NOTIFY: Invoke（非同期）
 ```

@@ -24,6 +24,8 @@
 | オーケストレーション | Step Functions が順番を決めて呼ぶ連携（投入 → データ連携） |
 | コレオグラフィ | 各サービスがイベントに反応して動く連携（SQS → Consumer、状態変化 → 通知） |
 | 土台 / アプリ | Terraform が持つ変更頻度の低いリソース / CDK が持つ頻繁に変わるリソース |
+| LMI（Lambda Managed Instances） | Lambda の関数を、キャパシティプロバイダが起動する EC2 インスタンスの上で動かす仕組み。非同期の呼び出しなら 15 分を超えて動ける。本デモでは `dev` のデータ連携 Lambda だけに使う（09「LMI（Lambda Managed Instances）」） |
+| タスクトークン | Step Functions が `.waitForTaskToken` のタスクに渡す宛先。データ連携 Lambda はこれで結果（`SendTaskSuccess` / `SendTaskFailure`）とハートビートを返す |
 
 ## コーディング規約・命名
 
@@ -35,6 +37,7 @@
 | ステートマシン | 同上、`<name>` は `batch` | `serverless-practice-app-local-batch` |
 | SQS FIFO | 同上、末尾に `.fifo` | `serverless-practice-app-dev-mail.fifo` / `serverless-practice-app-dev-mail-dlq.fifo` |
 | SSM パラメータ | `/serverless-practice-app/<stage>/<name>` | `/serverless-practice-app/dev/queue/url` |
+| LMI のリソース（`dev` だけ） | `serverless-practice-app-<stage>-lmi`（VPC・サブネット・IGW・ルートテーブル・セキュリティグループ・キャパシティプロバイダ）、`-lmi-operator`（オペレーターのロール） | `serverless-practice-app-dev-lmi` |
 | Lambda の `<name>` | handler のファイル名と一致させる（kebab-case） | `functions/src/handlers/data-sync.ts` → `data-sync` |
 | エラークラス | `<内容>Error`。`name` プロパティをクラス名と一致させる（Step Functions がこの名前で判定するため） | `InjectedFailureError` |
 
@@ -45,7 +48,7 @@
 | ライブラリ / 資料 | 用途 |
 |-----------|------|
 | [AWS バッチ構成の整理と確認事項](references/aws-batch-architecture.md) | 本デモの元資料。再現する構成・シーケンス・論点の出典 |
-| `@aws-sdk/client-sqs` / `@aws-sdk/client-s3` | 投入 Lambda・データ連携 Lambda から AWS を呼ぶ |
+| `@aws-sdk/client-sqs` / `@aws-sdk/client-s3` / `@aws-sdk/client-sfn` | 投入 Lambda・データ連携 Lambda から AWS を呼ぶ（`client-sfn` はデータ連携 Lambda が結果を返すため。IT でも使う） |
 | `zod` | 入力の検証と型の導出（`typescript.md`） |
 | `aws-cdk-lib` / `constructs` | アプリ側の IaC |
 | `aws-cdk` | CDK の CLI（`cdk synth` / `deploy`） |
@@ -53,7 +56,7 @@
 | `tsx` | CDK アプリ（TypeScript）をそのまま実行する |
 | `vitest` | テストランナー |
 | `aws-sdk-client-mock` | UT で AWS SDK の呼び出しをモックする |
-| `@aws-sdk/client-sfn` / `@aws-sdk/client-cloudwatch-logs` / `@aws-sdk/client-ssm` / `@aws-sdk/client-lambda` | IT で LocalStack の実行を起動し、ログ・パラメータを読み、Consumer のイベントソースを止める |
+| `@aws-sdk/client-cloudwatch-logs` / `@aws-sdk/client-ssm` / `@aws-sdk/client-lambda` | IT で LocalStack の実行を起動し、ログ・パラメータを読み、Consumer のイベントソースを止める |
 | `@types/aws-lambda` | Lambda のイベント・応答の型（`SQSBatchResponse` 等） |
 | `esbuild` | `NodejsFunction` によるバンドル |
 | `eslint` / `typescript-eslint` / `eslint-plugin-jsdoc` / `eslint-config-prettier` / `prettier` | 静的解析・整形（`typescript.md`） |
@@ -62,5 +65,5 @@
 
 ## その他注記
 
-- **元資料との差分**: VPC・Security Group は作らない（09「費用」）。データ連携の書き出し順と Lambda の分割（1 つにまとめる）は元資料で未確定のため、本デモで決めた（03「データ連携 Lambda」）
+- **元資料との差分**: VPC・Security Group は、LMI のために `dev` だけに作る。プライベートサブネット・NAT Gateway は作らない（09「費用」）。データ連携の書き出し順と Lambda の分割（1 つにまとめる）は元資料で未確定のため、本デモで決めた（03「データ連携 Lambda」）
 - **再現する論点としない論点**: 元資料のリスク 1（Consumer の失敗が通知されない）とリスク 4（途中失敗の残骸）は構成どおりに作れば自然に再現する。リスク 2 の投入側は決定的な重複排除 ID で塞いでいる（05「メールメッセージ」）。残りの改善提案は将来構成とする

@@ -14,6 +14,8 @@ locals {
       "consumer/timeout-seconds" = tostring(var.consumer_timeout_seconds)
     },
     { for name in local.lambda_names : "role/${name}/arn" => aws_iam_role.lambda[name].arn },
+    # LMI を使うステージ（dev）だけ。CDK も同じ条件でだけこのパラメータを読む（lmi.tf）
+    local.lmi_enabled ? { "capacity-provider/arn" = aws_lambda_capacity_provider.lmi[0].arn } : {},
   )
 }
 

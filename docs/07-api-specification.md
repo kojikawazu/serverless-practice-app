@@ -25,7 +25,8 @@
 | ステートマシン | 投入 Lambda `enqueue` | 同期呼び出し（`lambda:invoke` 統合） | タスク入力 |
 | 投入 Lambda | メール送信キュー | `SendMessageBatch` | MailMessage |
 | メール送信キュー | Consumer Lambda `consumer` | イベントソースマッピング | SQS イベント |
-| ステートマシン | データ連携 Lambda `data-sync` | 同期呼び出し（`lambda:invoke` 統合） | タスク入力 |
+| ステートマシン | データ連携 Lambda `data-sync` | 非同期呼び出し（`lambda:invoke.waitForTaskToken` 統合、`InvocationType: "Event"`） | タスク入力 + タスクトークン |
+| データ連携 Lambda | ステートマシン | `SendTaskSuccess` / `SendTaskFailure` / `SendTaskHeartbeat` | データ連携 Lambda の出力・エラー |
 | EventBridge rule | Slack 通知 Lambda `notify-slack` | 非同期呼び出し | 状態変化イベント |
 
 ## リクエスト/レスポンス形式
@@ -33,11 +34,11 @@
 ### 実行入力（`StartExecution` の `input`）
 
 ```json
-{ "failAt": "dataSync" }
+{ "failAt": "dataSync", "holdSeconds": 960 }
 ```
 
-- `failAt` は省略できる。Scheduler からの定時起動では `{}` を渡す
-- 値と結果の対応は 02「F-6」
+- `failAt` / `holdSeconds` は省略できる。Scheduler からの定時起動では `{}` を渡す
+- 値と結果の対応は 02「F-6」。`holdSeconds` は検証用の待ち時間（秒、0〜1,200 の整数）で、データ連携 Lambda だけが使う
 
 ### タスク入力（投入・データ連携 Lambda 共通）
 
@@ -47,10 +48,22 @@
 { "executionName": "manual-20261008-001", "failAt": "dataSync" }
 ```
 
+データ連携 Lambda には、結果を返す宛先のタスクトークン `taskToken` も足す。投入 Lambda のタスク入力は `taskToken` を受け付けない（未知のキーとして拒否する）。
+
+```json
+{ "executionName": "manual-20261008-001", "holdSeconds": 960, "taskToken": "<タスクトークン>" }
+```
+
 ステートマシンは JSONata で書き、`Payload` を「実行入力に実行名を足したもの」として組む。
 
 ```text
 {% $merge([$states.input, {"executionName": $states.context.Execution.Name}]) %}
+```
+
+データ連携 Lambda の `Payload` はタスクトークンも足す。
+
+```text
+{% $merge([$states.input, {"executionName": $states.context.Execution.Name, "taskToken": $states.context.Task.Token}]) %}
 ```
 
 - 実行入力に `failAt` が無ければ、タスク入力にも無いまま渡る。JSONPath の `"failAt.$": "$.failAt"` のように、項目が無いだけで `States.Runtime` で落ちることがない
@@ -67,6 +80,8 @@
 ```json
 { "exported": 3, "s3Key": "exports/2026-10-08/manual-20261008-001.json" }
 ```
+
+戻り値ではなく、`SendTaskSuccess` の `output` として返す（非同期で呼ばれるため、戻り値はステートマシンに届かない）。
 
 ステートマシンはタスクの出力を次のステートの入力に流さない（各タスクの `Output` を `{% $states.input %}` にして実行入力を保つ）。`DataSync` が実行入力の `failAt` を読めるようにするため。
 
@@ -130,12 +145,16 @@ Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `n
 
 認証は IAM のみ（06「認証」）。HTTP ステータスコードの代わりに、Lambda が投げるエラーの名前（`errorType`）で契約する。Step Functions の `Retry` と実行結果の `error` はこの名前で判定される。
 
+データ連携 Lambda はエラーを投げず、`SendTaskFailure` で返す。`error` にエラー名、`cause` に Lambda が投げたときと同じ形の JSON（`{"errorType": ..., "errorMessage": ...}`。`errorMessage` は 4,096 文字まで）を入れるため、`Retry` の判定・実行結果・通知の見え方は投げたときと変わらない。
+
 | エラー名 | 発生条件 | Step Functions の `Retry` | 実行結果 |
 |---|---|---|---|
 | `ValidationError` | 入力がスキーマに合わない | しない | `FAILED` |
 | `InjectedFailureError` | `failAt` で失敗を注入した | しない | `FAILED` |
 | `EnqueuePartialFailureError` | `SendMessageBatch` の一部が失敗した | する。全件を送り直すが、重複排除 ID が決定的なため送信済みの分は重複しない | 尽きたら `FAILED` |
 | `Lambda.ServiceException` ほか一時的なエラー | Lambda サービス側の一時的な失敗 | する（04「リトライ」） | 尽きたら `FAILED` |
-| `States.Timeout` | ステートマシンが 5 分を超えた | — | `TIMED_OUT`。この名前は実行履歴の `ExecutionTimedOut` イベントにだけ出る。実 AWS では実行（`describe-execution`）に `error` / `cause` の項目が無く、通知にも値が届かない（09「`dev` での検証結果」）。LocalStack では実行の `error` が `null` で、この名前は出ない（09「LocalStack での検証結果」） |
+| `States.Timeout`（`DataSync`） | `DataSync` タスクがタイムアウトを超えた（04「パフォーマンス要件」） | しない | `FAILED` |
+| `States.HeartbeatTimeout` | データ連携 Lambda が結果もハートビートも 300 秒返さなかった（結果を返せずに終えた・落ちた） | しない | `FAILED` |
+| `States.Timeout`（実行全体） | ステートマシンが 40 分を超えた | — | `TIMED_OUT`。この名前は実行履歴の `ExecutionTimedOut` イベントにだけ出る。実 AWS では実行（`describe-execution`）に `error` / `cause` の項目が無く、通知にも値が届かない（09「`dev` での検証結果」）。LocalStack では実行の `error` が `null` で、この名前は出ない（09「LocalStack での検証結果」） |
 
 Consumer Lambda はエラーを投げず、失敗したメッセージを `batchItemFailures` で返す。Slack 通知 Lambda は対象外のイベントでもエラーを投げない（04「エラーハンドリング・堅牢性」）。

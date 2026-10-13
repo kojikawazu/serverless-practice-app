@@ -14,10 +14,18 @@ locals {
       actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
       resources = [aws_sqs_queue.mail.arn]
     }]
-    data-sync = [{
-      actions   = ["s3:PutObject"]
-      resources = ["${aws_s3_bucket.exports.arn}/exports/*"]
-    }]
+    data-sync = [
+      {
+        actions   = ["s3:PutObject"]
+        resources = ["${aws_s3_bucket.exports.arn}/exports/*"]
+      },
+      {
+        # .waitForTaskToken で非同期に呼ばれ、結果をタスクトークンで返す（docs/09「LMI（Lambda Managed Instances）」）。
+        # ステートマシンの ARN に絞っても通ることを実 AWS で確かめた（2026-10-13）
+        actions   = ["states:SendTaskSuccess", "states:SendTaskFailure", "states:SendTaskHeartbeat"]
+        resources = ["arn:aws:states:${var.region}:${local.account_id}:stateMachine:${local.prefix}-batch"]
+      },
+    ]
     notify-slack = []
   }
 }

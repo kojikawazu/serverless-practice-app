@@ -41,6 +41,7 @@ EventBridge Scheduler が決まった時刻に Step Functions を起動する。
 データ連携 Lambda が MySQL スタブから読んだデータを、S3・BigQuery スタブ・Cuenote FC スタブへ順に書き出す。
 
 - S3 はスタブにせず、Terraform が作ったバケットへ実際に書く
+- ステートマシンはデータ連携 Lambda を非同期で呼び、関数がタスクトークンで結果を返すまで待つ。`dev` では関数を LMI（Lambda Managed Instances）で動かし、Lambda の 15 分の上限を越えて動けるようにする（学習目的。01「スコープ」・09「LMI（Lambda Managed Instances）」）
 
 ### F-5: 失敗通知
 
@@ -59,6 +60,8 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 | `dataSync` | データ連携 Lambda（S3 へ書いた後、BigQuery へ書く前） | 実行は `FAILED`、Slack 通知が出る。S3 にファイルだけ残る |
 | `consumer` | Consumer Lambda（全メッセージ） | 実行は `SUCCEEDED`、メッセージは DLQ へ移る。Slack 通知は出ない |
 
+あわせて実行入力の `holdSeconds`（0〜1,200 秒）で、データ連携 Lambda が結果を返す前にその秒数だけ待つ。15 分を超える実行を再現するための遅延の注入で、定時起動では使わない（09「15 分を超える実行の再現」）。
+
 ### F-7: 2 段階のデプロイ
 
 同じ IaC を `local`（LocalStack）と `dev`（実 AWS）の両方へ、Terraform → CDK の順でデプロイできる。削除は CDK → Terraform の順。
@@ -70,6 +73,7 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 | 項目 | 必須 | 制約 |
 |------|------|------|
 | 実行入力 `failAt` | 任意 | `enqueue` / `dataSync` / `consumer` のいずれか。それ以外の値は検証エラーで実行を失敗させる |
+| 実行入力 `holdSeconds` | 任意 | 0〜1,200 の整数（秒）。それ以外の値は検証エラーで実行を失敗させる |
 | 配信対象 | 必須 | MySQL スタブが返す固定データ。メールアドレスは `@example.com` のみ |
 | メールメッセージ | 必須 | 配信対象 1 件につき 1 メッセージ |
 | 連携ファイル | 必須 | 1 実行につき S3 オブジェクト 1 つ（JSON） |
@@ -87,4 +91,7 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 - [x] `failAt` に未定義の値を渡すと、実行が `FAILED` になり、Slack スタブのログが出る → IT（08 #26）
 - [x] 同じ実行の投入 Lambda が Retry で再実行されても、5 分以内ならキューのメッセージは重複しない（UT で確認する） → UT（08 #2・#7）。重複を除くのは SQS FIFO の重複排除で、UT は同じ入力に同じ重複排除 ID を付けることを確かめる
 - [x] `dev` で、Schedule が定時に実行を起動し、`FAILED` の実行で Slack スタブのログが出る → 定時の Schedule（`cron`）が実行を起動することを確認（08 #33）。式の時・分だけを数分先へ一時的に変えて発火させたため、`cron(0 9 * * ? *)` そのものの発火は見ていない。`FAILED` で Slack スタブのログが出ることは、同じグループ・ロール・ターゲットの 1 回限りの Schedule（`at()`）の実行で確認（08 #23）。いずれも 09「`dev` での検証結果」
+- [x] `holdSeconds` を付けて実行すると、データ連携 Lambda がハートビートを送りながらその秒数だけ待ってから結果を返し、実行が `SUCCEEDED` になる → IT（08 #35。61 秒）
+- [ ] `dev` で、データ連携 Lambda が LMI で動き、`holdSeconds: 960` の実行が 15 分を超えて `SUCCEEDED` になる。`failAt: "dataSync"` の実行が `FAILED` になり Slack スタブのログが出る → #66（08 #36）
+- [ ] `dev` で、CDK → Terraform の順に削除すると、LMI のインスタンス・キャパシティプロバイダ・VPC も残らない → #66（08 #36）
 - [x] CDK → Terraform の順に削除すると、両方のスタックがエラーなく消える → `dev` で確認（09「`dev` での検証結果」）。`local` でも CI の `it` ジョブが毎回作って消している
