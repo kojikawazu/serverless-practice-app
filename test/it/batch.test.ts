@@ -95,6 +95,23 @@ describe("バッチの実行（LocalStack）", () => {
     }
   });
 
+  it("holdSeconds: 61: データ連携がハートビートを送りながら 61 秒待ってから結果を返し、SUCCEEDED になる", async () => {
+    const name = `${RUN_ID}-hold`;
+    // 60 秒ごとにハートビートを送るため、61 秒なら 0 秒と 60 秒の 2 回送る（docs/09「LMI（Lambda Managed Instances）」）
+    const holdSeconds = 61;
+
+    const execution = await runExecution(resources.stateMachineArn, name, {
+      holdSeconds,
+    });
+
+    expect(execution.status).toBe("SUCCEEDED");
+    const elapsedMs =
+      (execution.stopDate?.getTime() ?? 0) -
+      (execution.startDate?.getTime() ?? 0);
+    expect(elapsedMs).toBeGreaterThanOrEqual(holdSeconds * 1000);
+    expect(await findExportKeys(resources.bucketName, name)).toHaveLength(1);
+  });
+
   it('failAt: "enqueue": FAILED になり、Slack スタブに実行 ARN と FAILED が出て、キューにも DLQ にもメッセージが積まれない', async () => {
     const name = `${RUN_ID}-enqueue`;
     // Consumer が動いていると、積まれたメッセージは数秒で受け取られて消え、キューを見ても空になる。

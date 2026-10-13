@@ -20,10 +20,13 @@
 |---|---|---|
 | 投入 Lambda のタイムアウト | 30 秒 | `SendMessageBatch` 数回で終わる。Retry を含めてもステートマシンのタイムアウトに収まる |
 | Consumer Lambda のタイムアウト | 10 秒 | スタブへの出力のみ。DLQ 到達までの時間を短くするため小さく取る |
-| データ連携 Lambda のタイムアウト | 30 秒 | S3 への書き込み 1 回とスタブへの出力 |
+| データ連携 Lambda のタイムアウト | 1,800 秒（`local` は 900 秒） | 検証用の待ち（`holdSeconds` の上限 1,200 秒）に処理の余裕を足す。15 分を超えられるのは LMI で非同期に呼ぶ `dev` だけで、`local` は通常の Lambda の上限（09「LMI（Lambda Managed Instances）」） |
+| `DataSync` タスクのタイムアウト | 関数のタイムアウト + 60 秒（`dev` 1,860 秒・`local` 960 秒） | LMI はタイムアウトしてもコードを止めないため、ステートマシン側で必ず打ち切る |
+| `DataSync` タスクのハートビートのタイムアウト | 300 秒 | 関数は待つ間 60 秒ごとに送る。結果を返せずに止まった関数を、タスクのタイムアウトより早く見切る |
 | Slack 通知 Lambda のタイムアウト | 10 秒 | スタブへの出力のみ |
-| Lambda のメモリ | 256 MB（4 種共通） | 最小構成で足りる。cold start の短縮を兼ねる |
-| ステートマシンのタイムアウト | 5 分 | 正常時は数秒で終わる。超えたら `TIMED_OUT` で通知に乗せる |
+| Lambda のメモリ | 256 MB（データ連携 Lambda 以外） | 最小構成で足りる。cold start の短縮を兼ねる |
+| データ連携 Lambda のメモリ | 2,048 MB | LMI の最小構成（vCPU あたり 2 GiB、1 vCPU）。`local` も同じ値にそろえる |
+| ステートマシンのタイムアウト | 40 分 | 投入（Retry を含む）と `DataSync` のタイムアウトの合計より長くする。超えたら `TIMED_OUT` で通知に乗せる |
 | SQS の可視性タイムアウト | 60 秒 | Consumer のタイムアウトの 6 倍（AWS 推奨） |
 | DLQ 到達までの目安 | 約 3 分 | 可視性タイムアウト 60 秒 × 受信 3 回 |
 | Consumer のバッチサイズ | 5 件 | 部分バッチ応答で 1 件ずつ成否を返す |
@@ -41,6 +44,7 @@
 | Step Functions の Lambda タスク | `Retry` | `Lambda.ServiceException` / `Lambda.AWSLambdaException` / `Lambda.SdkClientException` / `Lambda.TooManyRequestsException`。投入タスクのみ `EnqueuePartialFailureError` も対象 | 最大 2 回、初回 2 秒、倍率 2 |
 | Consumer | SQS の再配信 | 失敗したメッセージすべて | 受信 3 回で DLQ（`maxReceiveCount: 3`） |
 | Slack 通知 Lambda | 非同期呼び出しの再試行 | 関数のエラー | Lambda 既定（最大 2 回） |
+| データ連携 Lambda | 非同期呼び出しの再試行 | — | **0 回**。同じタスクトークンで処理が二重に走らないようにする。やり直しは `DataSync` タスクの `Retry`（上の行）に任せる。関数が `SendTaskFailure` で返したエラー名にも同じ `Retry` が効く |
 
 注入エラー（`InjectedFailureError`）と検証エラー（`ValidationError`）は `Retry` の対象にしない。何度やり直しても同じ結果になるため。
 
@@ -63,6 +67,7 @@
 | Lambda の一時的なエラー | Step Functions の `Retry` で再実行する。尽きたら実行が `FAILED` になる |
 | Consumer での失敗（注入・本文不正） | その 1 件だけを再配信させる。3 回で DLQ へ移る。**通知は出ない**（元資料のリスク 1） |
 | データ連携の途中失敗 | 実行が `FAILED` になり通知が出る。前段の書き込み（S3 等）は残る（元資料のリスク 4） |
+| データ連携 Lambda が結果を返せない（タスクトークンが読めない・`SendTaskFailure` も失敗した・関数が落ちた） | エラーログを出して終える。`DataSync` がハートビートかタスクのタイムアウトで失敗し、実行が `FAILED` になり通知が出る。待ち続けず、判定できない結果を成功にも丸めない |
 | ステートマシンのタイムアウト | 実行が `TIMED_OUT` になり通知が出る |
 | 手動での実行停止 | 実行が `ABORTED` になり通知が出る |
 | 通知 Lambda が想定外のイベントを受けた | 何もせず正常終了し、警告ログを出す（誤ったイベントで再試行を繰り返さない） |

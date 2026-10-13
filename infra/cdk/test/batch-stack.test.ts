@@ -64,7 +64,10 @@ function stateMachineDefinition(json: TemplateJson): {
       Next?: string;
       End?: boolean;
       Retry?: { ErrorEquals: string[]; MaxAttempts: number }[];
-      Arguments: { Payload: string };
+      Resource: string;
+      TimeoutSeconds?: number;
+      HeartbeatSeconds?: number;
+      Arguments: { Payload: string; InvocationType?: string };
       Output: string;
     }
   >;
@@ -94,17 +97,17 @@ beforeAll(() => {
 describe("BatchStack（local）", () => {
   describe("正常系", () => {
     it.each([
-      ["enqueue", 30],
-      ["data-sync", 30],
-      ["notify-slack", 10],
+      ["enqueue", 256, 30],
+      ["data-sync", 2048, 900],
+      ["notify-slack", 256, 10],
     ])(
-      "%s は Node.js 22・arm64・256 MB・タイムアウト %i 秒で作る",
-      (name, timeout) => {
+      "%s は Node.js 22・arm64・%i MB・タイムアウト %i 秒で作る",
+      (name, memory, timeout) => {
         template.hasResourceProperties("AWS::Lambda::Function", {
           FunctionName: `serverless-practice-app-local-${name}`,
           Runtime: "nodejs22.x",
           Architectures: ["arm64"],
-          MemorySize: 256,
+          MemorySize: memory,
           Timeout: timeout,
         });
       },
@@ -133,13 +136,13 @@ describe("BatchStack（local）", () => {
       });
     });
 
-    it("ステートマシンは JSONata で Enqueue → DataSync を順に実行し、5 分でタイムアウトする", () => {
+    it("ステートマシンは JSONata で Enqueue → DataSync を順に実行し、40 分でタイムアウトする", () => {
       const definition = stateMachineDefinition(json);
 
       expect(definition).toMatchObject({
         StartAt: "Enqueue",
         QueryLanguage: "JSONata",
-        TimeoutSeconds: 300,
+        TimeoutSeconds: 2400,
       });
       expect(definition.States.Enqueue?.Next).toBe("DataSync");
       expect(definition.States.DataSync?.End).toBe(true);
@@ -152,15 +155,38 @@ describe("BatchStack（local）", () => {
       });
     });
 
-    it("タスク入力は実行入力に実行名を足したもの、タスクの出力は実行入力のまま次へ渡す", () => {
+    it("タスク入力は実行入力に実行名を足したもの（DataSync はタスクトークンも足す）、タスクの出力は実行入力のまま次へ渡す", () => {
       const { States } = stateMachineDefinition(json);
 
+      expect(States.Enqueue?.Arguments.Payload).toBe(
+        '{% $merge([$states.input, {"executionName": $states.context.Execution.Name}]) %}',
+      );
+      expect(States.DataSync?.Arguments.Payload).toBe(
+        '{% $merge([$states.input, {"executionName": $states.context.Execution.Name, "taskToken": $states.context.Task.Token}]) %}',
+      );
       for (const state of [States.Enqueue, States.DataSync]) {
-        expect(state?.Arguments.Payload).toBe(
-          '{% $merge([$states.input, {"executionName": $states.context.Execution.Name}]) %}',
-        );
         expect(state?.Output).toBe("{% $states.input %}");
       }
+    });
+
+    it("投入は同期で呼び、DataSync は非同期で呼んで関数がタスクトークンで結果を返すまで待つ", () => {
+      const { States } = stateMachineDefinition(json);
+
+      expect(States.Enqueue?.Resource).toMatch(/:states:::lambda:invoke$/);
+      expect(States.Enqueue?.Arguments.InvocationType).toBeUndefined();
+      expect(States.DataSync?.Resource).toMatch(
+        /:states:::lambda:invoke\.waitForTaskToken$/,
+      );
+      expect(States.DataSync?.Arguments.InvocationType).toBe("Event");
+    });
+
+    it("DataSync は関数のタイムアウト（900 秒）に 60 秒を足して打ち切り、ハートビートが 300 秒途切れても打ち切る", () => {
+      const { States } = stateMachineDefinition(json);
+
+      expect(States.DataSync).toMatchObject({
+        TimeoutSeconds: 960,
+        HeartbeatSeconds: 300,
+      });
     });
 
     it("Consumer は SSM のキュー ARN から、5 件ずつ部分バッチ応答で受け取る", () => {
@@ -279,6 +305,23 @@ describe("BatchStack（local）", () => {
       }
     });
 
+    it("データ連携 Lambda は非同期の呼び出しを再試行しない（同じタスクトークンで二重に走らせない）", () => {
+      template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 1);
+      template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+        FunctionName: Match.anyValue(),
+        Qualifier: "$LATEST",
+        MaximumRetryAttempts: 0,
+      });
+    });
+
+    it("local ではどの関数も LMI に紐付けない（LocalStack のライセンスで LMI の API を使えない）", () => {
+      for (const fn of Object.values(json.Resources).filter(
+        (r) => r.Type === "AWS::Lambda::Function",
+      )) {
+        expect(fn.Properties.CapacityProviderConfig).toBeUndefined();
+      }
+    });
+
     it("Lambda を外から呼べるのは EventBridge から Slack 通知への 1 つだけ", () => {
       template.resourceCountIs("AWS::Lambda::Permission", 1);
       template.hasResourceProperties("AWS::Lambda::Permission", {
@@ -289,21 +332,68 @@ describe("BatchStack（local）", () => {
 });
 
 describe("BatchStack（dev）", () => {
-  it("ステージがリソース名と SSM パラメータのパスに入る（local の値を参照しない）", () => {
-    const dev = synth("dev");
-    const devJson = dev.toJSON() as TemplateJson;
+  let dev: Template;
+  let devJson: TemplateJson;
 
+  beforeAll(() => {
+    dev = synth("dev");
+    devJson = dev.toJSON() as TemplateJson;
+  }, 60_000);
+
+  it("ステージがリソース名と SSM パラメータのパスに入る（local の値を参照しない）", () => {
     dev.hasResourceProperties("AWS::StepFunctions::StateMachine", {
       StateMachineName: "serverless-practice-app-dev-batch",
     });
     const defaults = Object.values(devJson.Parameters).flatMap((p) =>
       p.Default === undefined ? [] : [p.Default],
     );
+    // local の 11 個に、LMI のキャパシティプロバイダの ARN を足した 12 個
     expect(
       defaults.filter((name) => name.startsWith("/serverless-practice-app/")),
-    ).toHaveLength(11);
+    ).toHaveLength(12);
     expect(defaults.filter((name) => name.includes("/local/"))).toEqual([]);
-  }, 60_000);
+  });
+
+  it("データ連携 Lambda を Terraform のキャパシティプロバイダ（SSM の ARN）に紐付け、実行環境を 1 つだけ保つ", () => {
+    dev.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "serverless-practice-app-dev-data-sync",
+      MemorySize: 2048,
+      Timeout: 1800,
+      CapacityProviderConfig: {
+        LambdaManagedInstancesCapacityProviderConfig: {
+          CapacityProviderArn: ssmRef(
+            devJson,
+            "/serverless-practice-app/dev/capacity-provider/arn",
+          ),
+          ExecutionEnvironmentMemoryGiBPerVCpu: 2,
+        },
+      },
+      PublishToLatestPublished: true,
+      FunctionScalingConfig: {
+        MinExecutionEnvironments: 1,
+        MaxExecutionEnvironments: 1,
+      },
+    });
+  });
+
+  it("LMI に紐付けるのはデータ連携 Lambda だけ", () => {
+    const attached = Object.values(devJson.Resources).flatMap((r) =>
+      r.Type === "AWS::Lambda::Function" &&
+      r.Properties.CapacityProviderConfig !== undefined
+        ? [r.Properties.FunctionName]
+        : [],
+    );
+    expect(attached).toEqual(["serverless-practice-app-dev-data-sync"]);
+  });
+
+  it("DataSync は関数のタイムアウト（1,800 秒。LMI で 15 分を超える）に 60 秒を足して打ち切る", () => {
+    const { States } = stateMachineDefinition(devJson);
+
+    expect(States.DataSync).toMatchObject({
+      TimeoutSeconds: 1860,
+      HeartbeatSeconds: 300,
+    });
+  });
 });
 
 describe("parseStage", () => {

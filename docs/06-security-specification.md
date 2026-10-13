@@ -32,15 +32,17 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 |---|---|---|---|
 | 投入 Lambda | Lambda | `sqs:SendMessage` | メール送信キュー |
 | Consumer Lambda | Lambda | `sqs:ReceiveMessage` / `sqs:DeleteMessage` / `sqs:GetQueueAttributes` | メール送信キュー |
-| データ連携 Lambda | Lambda | `s3:PutObject` | 出力先バケットの `exports/*` |
+| データ連携 Lambda | Lambda | `s3:PutObject` / `states:SendTaskSuccess` / `states:SendTaskFailure` / `states:SendTaskHeartbeat` | 出力先バケットの `exports/*` / ステートマシン `serverless-practice-app-<stage>-batch`（タスクトークンで結果を返すため） |
 | Slack 通知 Lambda | Lambda | なし（ログ出力のみ） | — |
 | ステートマシン | Step Functions | `lambda:InvokeFunction` | `serverless-practice-app-<stage>-enqueue` / `-data-sync`（`:*` のバージョン・エイリアスを含む） |
 | Scheduler | EventBridge Scheduler | `states:StartExecution` | `serverless-practice-app-<stage>-batch` |
+| LMI のオペレーター（`dev` だけ） | Lambda | AWS 管理ポリシー `AWSLambdaManagedEC2ResourceOperator` | キャパシティプロバイダが EC2 インスタンスを起動・終了する（公式の手順どおり。09「LMI（Lambda Managed Instances）」） |
 
 - Lambda 4 種は共通で CloudWatch Logs への書き込み（`logs:CreateLogStream` / `logs:PutLogEvents`）を持つ。対象は自分のロググループに限る
 - ロググループは CDK が作るため、`logs:CreateLogGroup` は付けない
 - EventBridge rule から Slack 通知 Lambda への呼び出しは、関数側のリソースベースポリシーで許可する（CDK がターゲット設定時に付ける。ロールの変更ではない）
-- `*` のアクション・`*` のリソースは使わない
+- `*` のアクション・`*` のリソースは使わない。例外は LMI のオペレーターの AWS 管理ポリシーで、Lambda が EC2 を操作するために公式が指定するもの。`dev` で検証する間だけ存在する
+- LMI のインスタンスのセキュリティグループは、受信を許さず、送信は HTTPS（443）だけにする
 - **`local` では権限の過不足を確かめられない**: LocalStack は既定で IAM のポリシーを評価しないため、権限が足りなくても動く。最小権限で動くことは `dev` で確かめる（#23）
 
 ## 入力バリデーション
@@ -50,7 +52,9 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | 入力 | ルール | 不正なときの振る舞い |
 |-----------|--------|------|
 | 実行入力 `failAt` | 省略、または `enqueue` / `dataSync` / `consumer` のいずれか | `ValidationError` で失敗する（リトライしない） |
+| 実行入力 `holdSeconds` | 省略、または 0〜1,200 の整数 | `ValidationError` で失敗する（リトライしない） |
 | 投入・データ連携 Lambda の `executionName` | 空でない文字列。80 文字以内、英数字・`-`・`_` のみ | `ValidationError` で失敗する |
+| データ連携 Lambda の `taskToken` | 1〜2,048 文字の文字列（`SendTask*` の制約） | 結果を返せないため、エラーログを出して終える。`DataSync` はハートビートのタイムアウトで失敗する。投入 Lambda のタスク入力では未知のキーとして拒否する |
 | SQS メッセージ本文 | JSON として読め、05「メールメッセージ」の全フィールドを持つ。`email` はメールアドレス形式 | その 1 件を失敗として返す（3 回で DLQ） |
 | EventBridge イベント | `detail-type` が `Step Functions Execution Status Change`、`detail.status` が通知対象の 3 状態のいずれか | 警告ログを出して正常終了する |
 

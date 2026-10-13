@@ -13,6 +13,7 @@
 - **データ連携**: データ連携 Lambda が MySQL スタブから読んだデータを、S3（実バケット）・BigQuery スタブ・Cuenote FC スタブへ書き出す
 - **失敗通知**: 実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、EventBridge rule が Slack 通知 Lambda を呼ぶ。Consumer 側の失敗（DLQ 行き）は通知されない（元資料のリスクの再現）
 - **失敗の注入**: 実行入力の `failAt` で投入・データ連携・Consumer のいずれかを失敗させ、通知に乗る / 乗らないの違いを確かめる
+- **LMI（学習目的）**: `dev` ではデータ連携 Lambda を Lambda Managed Instances で動かし、ステートマシンが非同期の呼び出しとタスクトークンで結果を待つ。実行入力の `holdSeconds` で待ち時間を足し、Lambda の 15 分の上限を越える実行を再現する。存在する間は EC2 の料金がかかるため、`dev` は検証の間だけ作って消す（[09「LMI」](docs/09-architecture-specification.md#lmilambda-managed-instances)）
 
 技術スタックは TypeScript（Node.js 22）の Lambda、土台を Terraform・アプリを AWS CDK で管理する 2 段構成で、LocalStack（`local`）と実 AWS（`dev`）の両方へ同じ IaC でデプロイします。詳細は [09 アーキテクチャ仕様書](docs/09-architecture-specification.md#技術スタック) を参照してください。
 
@@ -60,7 +61,7 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 
 ```bash
 ./scripts/terraform.sh local init     # state の置き場所を設定する
-./scripts/terraform.sh local apply    # 土台を作る（IAM・SQS・S3・Schedule group・SSM）
+./scripts/terraform.sh local apply    # 土台を作る（IAM・SQS・S3・Schedule group・SSM。dev は LMI の VPC・キャパシティプロバイダも）
 ./scripts/terraform.sh local destroy  # 土台を消す（CDK を先に消す）
 ```
 
@@ -80,7 +81,7 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 ./scripts/batch.sh local dlq                   # DLQ のメッセージ数を出す
 ```
 
-受け入れ条件（[02](docs/02-requirements-specification.md#受け入れ条件)）と `tfstate-bucket.sh` は IT でまとめて確かめられます。LocalStack の起動とデプロイが前提で、約 4 分かかります。CI（`ci.yml` の `it`）も同じスクリプトを同じ順で実行します。
+受け入れ条件（[02](docs/02-requirements-specification.md#受け入れ条件)）と `tfstate-bucket.sh` は IT でまとめて確かめられます。LocalStack の起動とデプロイが前提で、約 6 分かかります。CI（`ci.yml` の `it`）も同じスクリプトを同じ順で実行します。
 
 ```bash
 npm run test:it

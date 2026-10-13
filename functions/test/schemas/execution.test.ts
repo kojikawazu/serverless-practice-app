@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  dataSyncTaskInputSchema,
   executionInputSchema,
   taskInputSchema,
 } from "../../src/schemas/execution";
@@ -108,6 +109,103 @@ describe("taskInputSchema（タスク入力）", () => {
       expect(taskInputSchema.safeParse({ executionName: 123 }).success).toBe(
         false,
       );
+    });
+  });
+});
+
+describe("holdSeconds（検証用の待ち時間）", () => {
+  describe("正常系", () => {
+    it.each([0, 960, 1200])(
+      "実行入力・タスク入力とも %d 秒を受理する",
+      (holdSeconds) => {
+        expect(executionInputSchema.parse({ holdSeconds })).toEqual({
+          holdSeconds,
+        });
+        expect(
+          taskInputSchema.parse({ executionName: "run-1", holdSeconds }),
+        ).toEqual({ executionName: "run-1", holdSeconds });
+      },
+    );
+  });
+
+  describe("準正常系", () => {
+    it.each([1201, -1, 1.5])(
+      "範囲外・小数の %d 秒を拒否する",
+      (holdSeconds) => {
+        expect(executionInputSchema.safeParse({ holdSeconds }).success).toBe(
+          false,
+        );
+        expect(
+          taskInputSchema.safeParse({ executionName: "run-1", holdSeconds })
+            .success,
+        ).toBe(false);
+      },
+    );
+  });
+
+  describe("異常系", () => {
+    it.each(["60", null])("数値でない %j を拒否する", (holdSeconds) => {
+      expect(executionInputSchema.safeParse({ holdSeconds }).success).toBe(
+        false,
+      );
+    });
+  });
+});
+
+describe("dataSyncTaskInputSchema（データ連携 Lambda のタスク入力）", () => {
+  describe("正常系", () => {
+    it("共通のタスク入力にタスクトークンを足した入力を受理する", () => {
+      const input = {
+        executionName: "run-1",
+        failAt: "dataSync",
+        holdSeconds: 60,
+        taskToken: "token",
+      };
+
+      expect(dataSyncTaskInputSchema.parse(input)).toEqual(input);
+    });
+
+    it("SendTask* の上限と同じ 2,048 文字のタスクトークンを受理する", () => {
+      expect(
+        dataSyncTaskInputSchema.safeParse({
+          executionName: "run-1",
+          taskToken: "t".repeat(2048),
+        }).success,
+      ).toBe(true);
+    });
+  });
+
+  describe("準正常系", () => {
+    it.each([
+      ["無い", undefined],
+      ["空", ""],
+      ["2,049 文字", "t".repeat(2049)],
+    ])("タスクトークンが%s入力を拒否する", (_label, taskToken) => {
+      expect(
+        dataSyncTaskInputSchema.safeParse({ executionName: "run-1", taskToken })
+          .success,
+      ).toBe(false);
+    });
+
+    it("共通のタスク入力と同じく、未知のキーを拒否する", () => {
+      expect(
+        dataSyncTaskInputSchema.safeParse({
+          executionName: "run-1",
+          taskToken: "token",
+          holdsecond: 60,
+        }).success,
+      ).toBe(false);
+    });
+  });
+
+  describe("異常系", () => {
+    it("共通のタスク入力（投入 Lambda）はタスクトークンを受け付けない", () => {
+      expect(
+        taskInputSchema.safeParse({
+          executionName: "run-1",
+          taskToken: "token",
+        }).success,
+      ).toBe(false);
     });
   });
 });

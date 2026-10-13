@@ -126,6 +126,7 @@ Terraform が書き、CDK が合成時に読む。名前は `/serverless-practic
 | `role/state-machine/arn` | ステートマシンの実行ロール ARN | ステートマシン |
 | `role/scheduler/arn` | Scheduler の実行ロール ARN | Schedule 定義 |
 | `consumer/timeout-seconds` | Consumer Lambda のタイムアウト（秒）。正本は Terraform の `consumer_timeout_seconds` で、SQS の可視性タイムアウトはこの 6 倍（04「連動するパラメータ」） | Consumer Lambda のタイムアウト |
+| `capacity-provider/arn` | LMI のキャパシティプロバイダの ARN。`dev` だけに作る（`local` には無い） | データ連携 Lambda の LMI への紐付け（`dev` だけ。09「LMI（Lambda Managed Instances）」） |
 
 #### インデックス・制約
 
