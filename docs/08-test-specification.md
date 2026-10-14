@@ -17,6 +17,7 @@
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3・Step Functions）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン・`DataSync` の呼び出し方・LMI の紐付け） |
+| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる点（Scheduler の定時起動・状態変化イベントによる通知・LMI での実行）。結果は 09「`dev` での検証結果」 |
@@ -73,6 +74,10 @@
 | 40 | スキーマ: `holdSeconds` は 0〜1,200 の整数だけを受理する（1,201・-1・1.5・文字列・`null` を拒否）。`taskToken` はデータ連携のタスク入力だけが受け付ける | UT | 準正常系 |
 | 41 | CDK: `DataSync` は `.waitForTaskToken` と `InvocationType: "Event"` で呼び、タイムアウト（関数 + 60 秒）とハートビート（300 秒）を持つ。データ連携 Lambda は非同期の呼び出しを再試行しない | UT | 異常系（設定ずれの検出） |
 | 42 | CDK: `dev` ではデータ連携 Lambda だけを SSM のキャパシティプロバイダに紐付け（実行環境は最小・最大 1、タイムアウト 1,800 秒）、`local` ではどの関数も紐付けない | UT | 異常系（設定ずれの検出） |
+| 43 | 予算アラートのスクリプト: 無ければ日次 3 USD の予算と実績 100% 超の通知を作り、2 回目は何も変えず、`--check` が 0 で終わる。通知先は環境変数か、`.env` の 1 行（`.env` を source しない） | UT | 正常系 |
+| 44 | 予算アラートのスクリプト: 額・通知先・余分な通知のずれだけを直す。通知の一覧が `NotFoundException` でも、予算があれば通知 0 件として扱う | UT | 準正常系 |
+| 45 | 予算アラートのスクリプト: `--check` のずれ・確認での中止・同名で期間の違う予算は、何も変えずに 1 で終わる。引数・通知先の誤りは AWS を呼ばずに 2 で終わる。画面のメールアドレスは伏せる | UT | 準正常系 |
+| 46 | 予算アラートのスクリプト: 読めない（権限不足）・作成の失敗・反映されない（API は成功）は 1 で終わる。読めないことを「無い」とみなして作らない | UT | 異常系 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 
