@@ -26,7 +26,7 @@
 | Terraform → CDK の受け渡し | SSM Parameter Store |
 | ローカル実行 | LocalStack（Docker）+ `tflocal` / `cdklocal` |
 | 実 AWS | 個人の検証用アカウント（ステージ名 `dev`） |
-| CI | GitHub Actions（actionlint / markdownlint / shellcheck / 秘匿ファイル検出 / 型検査・テスト / Terraform の整形・構文 / LocalStack での IT） |
+| CI | GitHub Actions（actionlint / markdownlint / Markdown の相対リンクの実在 / shellcheck / 秘匿ファイル検出 / 型検査・テスト / Terraform の整形・構文 / LocalStack での IT） |
 | パッケージ管理 | npm（リポジトリ直下に 1 つ） |
 
 ## 構成方針
@@ -322,6 +322,7 @@ main へは PR を通してしか入れず、次の必須チェックがすべ�
 | 必須チェック | ワークフロー | ドキュメント・ルールだけの変更 |
 |---|---|---|
 | `secret-scan` / `actionlint` / `markdownlint` / `shellcheck` | 同名の各ワークフロー | 実行する |
+| `doc-links`（Markdown の相対リンクの実在。#87） | `markdownlint.yml` | 実行する |
 | `changes` | `ci.yml`（変更の範囲の判定） | 実行する |
 | `check`（型検査・Lint・整形・UT） / `terraform` / `it` | `ci.yml` | skipped（成功として扱われる） |
 

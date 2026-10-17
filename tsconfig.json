@@ -18,5 +18,5 @@
     "isolatedModules": true,
     "skipLibCheck": true
   },
-  "include": ["functions", "infra/cdk", "test", "*.config.ts"]
+  "include": ["functions", "infra/cdk", "scripts", "test", "*.config.ts"]
 }
