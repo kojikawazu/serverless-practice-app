@@ -247,7 +247,7 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 - 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
 - 試し終えたら CDK → Terraform の順に削除する
 - 削除後も残る 2 つ（state バケットと CDK のブートストラップ）は、中身の保管料だけがかかる。どちらも量が小さく、残す理由がある（下記「`dev` での検証結果」の削除後に残るもの）
-- もう 1 つ、LMI のキャパシティプロバイダのロググループも残る。これは残す理由が無く、IaC の管理外にあるだけ（下記「`dev` での検証結果」の「LMI」。#71 で消えるようにする）
+- LMI のキャパシティプロバイダのロググループは、#66 までは IaC の管理外で残っていた。#71 で Terraform の管理下に置き、`down` で消えるようにした（下記「`dev` での検証結果」の「LMI」・「LMI」の「IaC の責務」）
 
 ### LocalStack での検証結果
 
@@ -301,7 +301,19 @@ LocalStack では使えない LMI（下記「LMI（Lambda Managed Instances）�
 
 - インスタンスは `describe-instances --include-managed-resources` で 0 件（終了済みを除く）。同じ条件で全状態を出すと 3 台とも `terminated` で、検査が空振りしていないことも確かめた。キャパシティプロバイダ・VPC・パブリック IPv4 も 0 件
 - これまでと同じく、`serverless-practice-app-dev-*` のリソースと Terraform の state は 0 件
-- **キャパシティプロバイダのロググループ `/aws/lambda/capacity-provider/serverless-practice-app-dev-lmi` は残る。** 最初のインスタンスの起動時に LMI のサービスが自動で作る（作成は 10/15 の検証時）もので、Terraform・CDK の管理外。保持期間は無期限で、量は約 2.4 KB。IaC で作って `down` で消えるようにする（#71）。それまでは残しておき、次のデプロイでも同じものが使われる
+- キャパシティプロバイダのロググループ `/aws/lambda/capacity-provider/serverless-practice-app-dev-lmi` は残った。最初のインスタンスの起動時に LMI のサービス（`scaler.lambda.amazonaws.com`）が自動で作る（作成は 10/15 の検証時）もので、Terraform・CDK の管理外だった。保持期間は無期限だった。**#71 で Terraform の管理下に置いた**（次の段落）
+
+#71（2026-10-17）で、残っていたロググループを消してから `scripts/stack.sh dev up` → `down` を通し、次のとおりになった。
+
+- `up`: ロググループを作ったのは Terraform だけ（`CreateLogGroup`・`PutRetentionPolicy`）で、LMI のサービスによる作成は無かった。LMI は既存のロググループにインスタンスの起動・終了のログを書いた。保持期間は 7 日のまま
+- `down`: 関数の削除（07:34:36Z）→ プロバイダの削除（07:36:07Z）→ 最後のインスタンスの終了（07:36:35Z）→ ロググループの削除（07:37:47Z）の順だった。**最後のインスタンスは、関数を消しても約 2 分間終わらず、プロバイダの削除の後に終わった**。ロググループをプロバイダと並行して消すと、この終了のログで作り直されうる（並行して消す構成は試していない。LMI がロググループを無ければ作ることは、10/15 の自動作成から分かっている。「LMI」の「IaC の責務」）
+- `down` の約 16 分後も、ロググループは 0 件で、LMI のサービスによる `CreateLogGroup` も無かった。同じ検索で 10/15 の自動作成が見えること、CloudTrail が `down` の後のイベントを返していることも確かめ、検索が空振りしていないことを示した
+
+| 確かめたこと | 確かめ方 |
+|---|---|
+| 誰がロググループを作ったか・作り直したか | CloudTrail の `CreateLogGroup`（`userIdentity`・`userAgent`）。Terraform は `APN/1.0`、LMI は `scaler.lambda.amazonaws.com` |
+| 削除の順序 | CloudTrail の `DeleteFunction`・`DeleteCapacityProvider`・`TerminateInstances`・`DeleteLogGroup` の時刻 |
+| 削除の順序が設定に入っていること | `terraform graph` に「プロバイダ → ロググループ」の辺がある。`depends_on` から外すと辺が消えることも確かめた |
 
 ## CI とマージの条件
 
@@ -417,6 +429,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 |---|---|---|
 | VPC・サブネット・IGW・ルートテーブル・セキュリティグループ | Terraform | 土台（「IaC の責務分担」） |
 | キャパシティプロバイダとそのオペレーター用 IAM ロール | Terraform。ARN を SSM で CDK に渡す | 他の IAM ロールと同じく土台に置く。削除順（CDK → Terraform）が「関数のバージョンを先に消し、その後プロバイダを消す」と一致し、プロバイダの削除でインスタンスが確実に消える |
+| キャパシティプロバイダのロググループ（`/aws/lambda/capacity-provider/<プロバイダ名>`、保持 7 日） | Terraform。プロバイダが `depends_on` で依存する | LMI のサービスがこの名前で自動で作り、プロバイダの設定では出し先を選べない。同じ名前で先に作って管理下に置き、`down` で消えるようにする。依存させるのは削除の順序のため: 最後のインスタンスは、関数を消しても終わらずに残り、プロバイダの削除をきっかけに終わることがある（#71 の `down` では、関数の削除の約 1.5 分後にプロバイダを消し、その 28 秒後に終了した）。ロググループをプロバイダと並行して消すと、その終了のログで LMI（`scaler.lambda.amazonaws.com`）が作り直しうる（並行して消す構成は試していない）。依存させると、Terraform はプロバイダの削除が終わるのを待ってからロググループを消す（#71 では終了の 72 秒後）。CDK に置くと、プロバイダより先に消えてしまう |
 | データ連携 Lambda のキャパシティプロバイダへの紐付け・タイムアウト（1,800 秒）・非同期の再試行 0 | CDK | 関数は CDK が持つ。Terraform は 900 秒を超えるタイムアウトを設定できない |
 | `DataSync` タスクの呼び出し方・タイムアウト・ハートビート | CDK | ステートマシンは CDK が持つ |
 
@@ -471,7 +484,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 | UT（handler） | 成功で `SendTaskSuccess`、想定した失敗で `SendTaskFailure`（エラー名・`cause` の形）を呼ぶ。`holdSeconds` の間にハートビートを送る。`SendTask*` が失敗したらエラーログを出す。`holdSeconds` の境界（0・1,200・範囲外・小数） |
 | UT（CDK） | `DataSync` が `.waitForTaskToken` と `InvocationType: "Event"` で呼ばれる。タスクのタイムアウト・ハートビート、関数のタイムアウト・キャパシティプロバイダの紐付け・非同期の再試行 0 |
 | IT（LocalStack） | 今のケース（08 #20〜#27・#32）が、結果の返し方を変えても通る。短い `holdSeconds` で `SUCCEEDED` になる |
-| 手動（`dev`） | 起動したインスタンスの台数・タイプ・パブリック IP。通常の実行と `failAt: "dataSync"` の結果と通知。`holdSeconds: 960` で 15 分を超えて `SUCCEEDED` になる。削除後にインスタンス・プロバイダ・VPC が 0 件になる。インスタンスは `describe-instances` の既定では見えないため、`--include-managed-resources` を付けて数える（#66 の結果は「`dev` での検証結果」の「LMI」） |
+| 手動（`dev`） | 起動したインスタンスの台数・タイプ・パブリック IP。通常の実行と `failAt: "dataSync"` の結果と通知。`holdSeconds: 960` で 15 分を超えて `SUCCEEDED` になる。削除後にインスタンス・プロバイダ・VPC・プロバイダのロググループが 0 件になり、ロググループが LMI に作り直されない（08 #50。#71）。インスタンスは `describe-instances` の既定では見えないため、`--include-managed-resources` を付けて数える（#66 の結果は「`dev` での検証結果」の「LMI」） |
 
 ### 実装で設計から変えた点
 

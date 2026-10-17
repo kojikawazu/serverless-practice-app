@@ -8,6 +8,9 @@ locals {
 
   # AZ ごとにパブリックサブネットを 1 つ置く。既定の 3 台は AZ に分かれて起動するため 3 つにする
   lmi_subnet_count = 3
+
+  # キャパシティプロバイダの名前。LMI はこの名前からロググループの名前を決める（下記 aws_cloudwatch_log_group.lmi_capacity_provider）
+  lmi_capacity_provider_name = "${local.prefix}-lmi"
 }
 
 data "aws_availability_zones" "lmi" {
@@ -111,10 +114,20 @@ resource "aws_iam_role_policy_attachment" "lmi_operator" {
   policy_arn = "arn:aws:iam::aws:policy/AWSLambdaManagedEC2ResourceOperator"
 }
 
+# キャパシティプロバイダのログ（インスタンスの起動・終了）の出し先。LMI のサービスは最初のインスタンスの起動時に
+# この名前のロググループを自動で作り、プロバイダの設定では出し先を選べない。自動で作られたものは IaC の管理外で
+# down の後も残るため、同じ名前で先に作り、管理下に置く（docs/09「`dev` での検証結果」の削除後に残るもの。#71）
+resource "aws_cloudwatch_log_group" "lmi_capacity_provider" {
+  count = local.lmi_enabled ? 1 : 0
+
+  name              = "/aws/lambda/capacity-provider/${local.lmi_capacity_provider_name}"
+  retention_in_days = 7 # docs/04「保持期間」
+}
+
 resource "aws_lambda_capacity_provider" "lmi" {
   count = local.lmi_enabled ? 1 : 0
 
-  name = "${local.prefix}-lmi"
+  name = local.lmi_capacity_provider_name
 
   vpc_config {
     subnet_ids         = aws_subnet.lmi[*].id
@@ -139,6 +152,11 @@ resource "aws_lambda_capacity_provider" "lmi" {
     scaling_policies = null
   }]
 
-  # ロールのポリシーが付く前に作ると、Lambda が EC2 を操作できずに作成が失敗しうる
-  depends_on = [aws_iam_role_policy_attachment.lmi_operator]
+  # ロールのポリシーが付く前に作ると、Lambda が EC2 を操作できずに作成が失敗しうる。
+  # ロググループは、作るときは先に作り、消すときはプロバイダの削除が終わってから消す。最後のインスタンスは
+  # プロバイダの削除をきっかけに終わることがあり、並行して消すと終了のログで LMI がロググループを作り直しうる（docs/09「LMI」。#71）
+  depends_on = [
+    aws_iam_role_policy_attachment.lmi_operator,
+    aws_cloudwatch_log_group.lmi_capacity_provider,
+  ]
 }
