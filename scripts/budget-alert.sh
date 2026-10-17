@@ -24,8 +24,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # アカウント単位の予算のため、名前にステージを入れない（docs/09「予算アラート」）
 BUDGET_NAME="serverless-practice-app-daily-cost"
-# 日次の上限（USD）。LMI の消し忘れ（約 $8/日）は越え、dev での検証 1 回（約 $0.35）は越えない額
-BUDGET_LIMIT_USD=3
+# 日次の上限（USD）。LMI を 1 台のまま消し忘れた場合の最も安い費用（m6g.large で約 $2.85/日）を確実に越え、
+# 他のプロジェクトの普段の費用（最大 $0.04/日）と dev での検証の日（実測 $0.12）は越えない額（docs/09「予算アラート」。#72）
+BUDGET_LIMIT_USD=1
 # 実績がこの割合（%）を超えたら知らせる
 THRESHOLD_PERCENT=100
 # Budgets の API はグローバルで、エンドポイントは us-east-1 にある

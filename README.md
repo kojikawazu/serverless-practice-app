@@ -59,7 +59,7 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 ./scripts/tfstate-bucket.sh dev --check   # 直さずに比べる（ずれがあれば終了コード 1）
 ```
 
-`dev` で LMI を使う前に、消し忘れに備える予算アラート（日次 3 USD を超えたらメール）を作ります。通知先は `.env` の `BUDGET_ALERT_EMAIL`（または同じ名前の環境変数）に置きます。予算はアカウント単位で、`stack.sh dev down` では消えません（[09「予算アラート」](docs/09-architecture-specification.md#予算アラート)）。
+`dev` で LMI を使う前に、消し忘れに備える予算アラート（日次 1 USD を超えたらメール）を作ります。通知先は `.env` の `BUDGET_ALERT_EMAIL`（または同じ名前の環境変数）に置きます。予算はアカウント単位で、`stack.sh dev down` では消えません（[09「予算アラート」](docs/09-architecture-specification.md#予算アラート)）。
 
 ```bash
 ./scripts/budget-alert.sh dev           # 無ければ作り、設定をそろえる（直す前に確認する）

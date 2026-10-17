@@ -54,7 +54,7 @@ function alignedState(): FakeAwsState {
       BudgetName: BUDGET_NAME,
       BudgetType: "COST",
       TimeUnit: "DAILY",
-      BudgetLimit: { Amount: "3", Unit: "USD" },
+      BudgetLimit: { Amount: "1", Unit: "USD" },
     },
     notifications: [
       {
@@ -196,7 +196,7 @@ function mutations(result: RunResult): string[] {
 
 describe("budget-alert.sh", () => {
   describe("正常系", () => {
-    it("予算が無ければ、日次 3 USD の予算と、実績 100% 超でメールする通知を作り、0 で終わる", () => {
+    it("予算が無ければ、日次 1 USD の予算と、実績 100% 超でメールする通知を作り、0 で終わる", () => {
       const result = run(emptyState());
 
       expect(result.code).toBe(0);
@@ -254,6 +254,22 @@ describe("budget-alert.sh", () => {
       expect(result.code).toBe(0);
       expect(mutations(result)).toEqual(["update-budget"]);
       expect(result.state).toEqual(alignedState());
+    });
+
+    it("#72 より前の額（AWS が返す形の 3.0）なら、1 USD に直す", () => {
+      const initial = alignedState();
+      if (initial.budget !== null) {
+        initial.budget.BudgetLimit.Amount = "3.0";
+      }
+
+      const result = run(initial);
+
+      expect(result.code).toBe(0);
+      expect(mutations(result)).toEqual(["update-budget"]);
+      expect(result.state.budget?.BudgetLimit).toEqual({
+        Amount: "1",
+        Unit: "USD",
+      });
     });
 
     it("通知先が違えば、正しい通知先を足して余分な通知先を消す", () => {
