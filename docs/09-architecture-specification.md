@@ -432,7 +432,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 
 #### 予算アラート
 
-**設計・実装は 2026-10-14（#65）。** `dev` のアカウントには 2026-10-15 に作り、#66 の最初（2026-10-17）に、予算（`COST`・日次・3.0 USD）があることを確かめた。`--check` は、AWS が省く `ThresholdType` をずれと判定して 1 で終わる（#69）。前提の事実は公式ドキュメントで確かめた（2026-10-14。[料金](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/)・[更新の頻度](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)・[アラート](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html)）。
+**設計・実装は 2026-10-14（#65）。** `dev` のアカウントには 2026-10-15 に作り、#66 の最初（2026-10-17）に、予算（`COST`・日次・3.0 USD）があることを確かめた。`--check` は、AWS が省く `ThresholdType` をずれと判定して 1 で終わっていた。比較で省略を `PERCENTAGE` とみなすように直し、2026-10-17 に `dev` で `--check` が 0 で終わることを確かめた（#69）。前提の事実は公式ドキュメントで確かめた（2026-10-14。[料金](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/)・[更新の頻度](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)・[アラート](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html)）。
 
 - 通知だけの予算は無料（有料なのは budget action を付けた予算だけ）
 - 予算の値の更新は 1 日に最大 3 回で、間隔は 8〜12 時間。請求そのものにも遅れがあるため、気づけるのは数時間〜翌日になる
@@ -457,8 +457,9 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 - 終了コード: 0 = そろっている（直してそろった場合を含む）、1 = ずれがある（`--check`）・判定できない・中止した、2 = 使い方の誤り（ステージが `dev` 以外・通知先が無い・形式が違う）
 - `local` は受け付けない。LocalStack は Budgets に対応していない（2026-10-13 に確認）
 - 予算はスクリプトでは消さない。デモを畳むときに手で消す
+- 通知は `NotificationType`・`ComparisonOperator`・`Threshold`・`ThresholdType` の 4 項目で比べる。実 AWS の `describe-notifications-for-budget` は、`ThresholdType` が既定値の `PERCENTAGE` なら項目ごと省く（2026-10-15 に観測。#69）ため、無ければ `PERCENTAGE` とみなす。`ABSOLUTE_VALUE` の通知は別の通知として扱う
 
-テスト（08 #43〜#46）は、PATH の先頭に置いた偽の `aws`（`test/scripts/helpers/fake-aws.ts`）（状態を JSON ファイルに持ち、呼び出しを記録する）でスクリプトを動かす（外部 I/O だけを差し替える。`testing.md`）。スクリプトは一時ディレクトリに複製して動かし、手元の `.env` を読ませない。偽物が呼ばれなかった場合に備え、接続先を到達できないアドレスに、認証情報をダミーにする。確かめるのは、作成・2 回目は変更なし・額のずれと余分な通知先だけを直す・`--check`・種類の違う同名の予算で止まる・読めないときに止まる・確認で中止・引数と通知先の誤り・`.env` を source しないこと。`npm test`（CI の `check`）で動く。偽の `aws` は Node の型除去（`--experimental-strip-types`）でそのまま動かす。
+テスト（08 #43〜#46）は、PATH の先頭に置いた偽の `aws`（`test/scripts/helpers/fake-aws.ts`）（状態を JSON ファイルに持ち、呼び出しを記録する）でスクリプトを動かす（外部 I/O だけを差し替える。`testing.md`）。スクリプトは一時ディレクトリに複製して動かし、手元の `.env` を読ませない。偽物が呼ばれなかった場合に備え、接続先を到達できないアドレスに、認証情報をダミーにする。偽の `aws` の応答は実 AWS の形に寄せ、`ThresholdType` が `PERCENTAGE` なら省く（#69 は、偽物が常に返していたため UT で見逃した）。確かめるのは、作成・2 回目は変更なし・額のずれと余分な通知先だけを直す・`ThresholdType` の違う通知を別物として消す・`--check`・種類の違う同名の予算で止まる・読めないときに止まる・確認で中止・引数と通知先の誤り・`.env` を source しないこと。`npm test`（CI の `check`）で動く。偽の `aws` は Node の型除去（`--experimental-strip-types`）でそのまま動かす。
 
 通知が 1 件も無い予算に `describe-notifications-for-budget` が `NotFoundException` を返すかは確かめていない。返した場合も、予算があることは先に確かめているため「通知 0 件」として扱う。
 

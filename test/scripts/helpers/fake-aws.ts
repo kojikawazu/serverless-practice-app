@@ -10,7 +10,8 @@
 // 形が違えばテストが落ちて分かるため。テスト用の偽物に Zod の検証を足すと、偽物の誤りを探す場所が増えるだけになる。
 //
 // 返す値の形は実 AWS に寄せる: 額は "3.0" のように小数で、通知には NotificationState が付き、
-// 予算には AWS が補う項目（CostTypes・TimePeriod・CalculatedSpend）が付く。スクリプトがこれらでずれと誤判定しないことを確かめるため。
+// 予算には AWS が補う項目（CostTypes・TimePeriod・CalculatedSpend）が付く。通知の ThresholdType は、
+// 既定値の PERCENTAGE なら項目ごと省く（2026-10-15 に dev で観測。#69）。スクリプトがこれらでずれと誤判定しないことを確かめるため。
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 /** 予算の通知（スクリプトが決める 4 項目） */
@@ -18,8 +19,12 @@ type Notification = {
   NotificationType: string;
   ComparisonOperator: string;
   Threshold: number;
-  ThresholdType: string;
+  /** 無ければ既定値の `PERCENTAGE`。実 AWS は `PERCENTAGE` のとき応答から省き、スクリプトは読んだ通知をそのまま渡すことがある */
+  ThresholdType?: string;
 };
+
+/** 通知の ThresholdType の既定値 */
+const DEFAULT_THRESHOLD_TYPE = "PERCENTAGE";
 
 /** 通知先 */
 type Subscriber = { SubscriptionType: string; Address: string };
@@ -101,7 +106,7 @@ function notificationKey(n: Notification): string {
     n.NotificationType,
     n.ComparisonOperator,
     Number(n.Threshold),
-    n.ThresholdType,
+    n.ThresholdType ?? DEFAULT_THRESHOLD_TYPE,
   ]);
 }
 
@@ -184,11 +189,18 @@ switch (`${service ?? ""} ${operation ?? ""}`) {
   case "budgets describe-notifications-for-budget":
     requireBudget();
     reply({
-      Notifications: state.notifications.map((e) => ({
-        ...e.notification,
-        Threshold: Number(e.notification.Threshold),
-        NotificationState: "OK",
-      })),
+      Notifications: state.notifications.map((e) => {
+        const { ThresholdType: thresholdType, ...rest } = e.notification;
+        return {
+          ...rest,
+          Threshold: Number(e.notification.Threshold),
+          ...(thresholdType === undefined ||
+          thresholdType === DEFAULT_THRESHOLD_TYPE
+            ? {}
+            : { ThresholdType: thresholdType }),
+          NotificationState: "OK",
+        };
+      }),
     });
     break;
   case "budgets describe-subscribers-for-notification":

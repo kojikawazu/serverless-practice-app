@@ -167,9 +167,14 @@ budget_want = json.loads(sys.argv[1])
 notif_want = json.loads(sys.argv[2])
 sub_want = json.loads(sys.argv[3])
 keys = ["NotificationType", "ComparisonOperator", "Threshold", "ThresholdType"]
+# 実 AWS は ThresholdType が既定値の PERCENTAGE なら、通知の応答から項目ごと省く（2026-10-15 に dev で観測。#69）
+defaults = {"ThresholdType": "PERCENTAGE"}
 
 def notif_key(n):
-    return {k: (float(n.get(k)) if k == "Threshold" and n.get(k) is not None else n.get(k)) for k in keys}
+    key = {k: n.get(k, defaults.get(k)) for k in keys}
+    if key["Threshold"] is not None:
+        key["Threshold"] = float(key["Threshold"])
+    return key
 
 def sub_key(s):
     return (s.get("SubscriptionType"), s.get("Address"))

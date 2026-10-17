@@ -293,6 +293,23 @@ describe("budget-alert.sh", () => {
       expect(result.state).toEqual(alignedState());
     });
 
+    it("ThresholdType が ABSOLUTE_VALUE の通知は、省かれた PERCENTAGE とは別の通知として消す", () => {
+      // 実 AWS は PERCENTAGE のときだけ ThresholdType を省く（#69）。省略を PERCENTAGE とみなす処理が、
+      // ThresholdType の比較そのものを無くしていないことを確かめる（100 USD 超で知らせる通知は別物）。
+      // スクリプトは一致した最初の通知を残すため、先頭に置く（末尾だと比較を無くしても正しい通知が先に残り、見逃す）
+      const initial = alignedState();
+      initial.notifications.unshift({
+        notification: { ...NOTIFICATION, ThresholdType: "ABSOLUTE_VALUE" },
+        subscribers: [{ SubscriptionType: "EMAIL", Address: EMAIL }],
+      });
+
+      const result = run(initial);
+
+      expect(result.code).toBe(0);
+      expect(mutations(result)).toEqual(["delete-notification"]);
+      expect(result.state).toEqual(alignedState());
+    });
+
     it("予算はあるが通知が無ければ、通知と通知先を足す（予算は作り直さない）", () => {
       const initial = alignedState();
       initial.notifications = [];
