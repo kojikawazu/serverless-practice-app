@@ -99,6 +99,7 @@ npm run test:it
 
 ```bash
 ./scripts/lint-docs.sh
+./scripts/check-doc-links.sh  # Markdown の相対リンク（ファイル・見出し）の実在。先に npm ci が要る
 ./scripts/lint-shell.sh
 ./scripts/lint-terraform.sh   # Terraform の整形・構文（CI も同じものを実行）
 ./scripts/check-secret-files.sh

@@ -17,7 +17,7 @@
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3・Step Functions）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン・`DataSync` の呼び出し方・LMI の紐付け） |
-| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` も、終わらない・失敗する実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる |
+| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` も、終わらない・失敗する実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる） |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる点（Scheduler の定時起動・状態変化イベントによる通知・LMI での実行）。結果は 09「`dev` での検証結果」 |
@@ -82,6 +82,9 @@
 | 48 | 実行のスクリプト: 範囲外・小数・数値でない `holdSeconds` は検証させるためにそのまま渡し、待つ上限を延ばさない。`BATCH_WAIT_SECONDS` が既定より優先される。値の無いオプション・未知のオプション・2 つ目の `failAt` は起動せずに 2 で終わる | UT | 準正常系 |
 | 49 | 実行のスクリプト: 待つ上限を過ぎても `RUNNING` なら 1 で終わる。ステートマシンの一覧を取れない（認証切れ）・見つからないは、それぞれ別のメッセージで起動せずに 1 で終わる | UT | 異常系 |
 | 50 | `dev` で、キャパシティプロバイダのロググループを Terraform が作り（保持 7 日）、LMI がそこへ書く。`down` で消え、10 分以上待っても LMI に作り直されない。作成・作り直しは CloudTrail の `CreateLogGroup` で数え、同じ検索で LMI の自動作成（10/15）が見えることを先に確かめる（09「`dev` での検証結果」の「LMI」。#71） | 手動 | 正常系 |
+| 51 | リンクの検査（`check-doc-links.sh`）: 相対リンクのリンク先（ファイル・ディレクトリ）と見出しが実在すれば 0 で終わる。見出しの ID は GitHub と同じ規則（日本語・全角の括弧・バッククォート・`→`・同名の見出しの `-1`・パーセントエンコード）。同じファイルの中の見出しも確かめる。外部 URL と、コードスパン・コードフェンスの中のリンクは確かめない | UT | 正常系 |
+| 52 | リンクの検査: リンク先のファイルが無い・見出しが 1 文字違う・同じファイルの見出しが無い・コードフェンスの中の `#`・同名の見出しの無い番号は、ファイルと行を出して 1 で終わる。未追跡のファイルも確かめ、`.gitignore` で除いたファイルは確かめない | UT | 準正常系 |
+| 53 | リンクの検査: 検査する Markdown が 0 件・git のリポジトリの外は、0 件として通さずに 1 で終わる。追跡したまま手元で消したファイルは読まずに飛ばす | UT | 異常系 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 

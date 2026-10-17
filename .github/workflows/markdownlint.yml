@@ -1,4 +1,4 @@
-# Markdown の検査（docs レーン）。既存の CI とは発火条件も実行内容も別物のため独立させる。
+# Markdown の検査（docs レーン）。書式（markdownlint）と相対リンクの実在（doc-links）。既存の CI とは発火条件も実行内容も別物のため独立させる。
 # 設定の正本: .markdownlint-cli2.jsonc / 運用方針の正本: .claude/rules/static-analysis.md
 name: markdownlint
 
@@ -29,3 +29,17 @@ jobs:
       # （手順を CI とローカルに書き分けると、必ずどちらかが腐る）
       - name: Lint Markdown
         run: ./scripts/lint-docs.sh
+
+  # 相対リンクのリンク先（ファイル・見出し）の実在（#87）。markdownlint の MD051 は同じファイルの中しか見ないため、
+  # ファイルをまたぐリンクはここで確かめる。見出しの ID を GitHub と同じ規則で作る依存（github-slugger）を入れるため npm ci が要る
+  doc-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Check Markdown links
+        run: ./scripts/check-doc-links.sh
