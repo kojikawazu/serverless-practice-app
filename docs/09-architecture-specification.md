@@ -247,6 +247,7 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 - 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
 - 試し終えたら CDK → Terraform の順に削除する
 - 削除後も残る 2 つ（state バケットと CDK のブートストラップ）は、中身の保管料だけがかかる。どちらも量が小さく、残す理由がある（下記「`dev` での検証結果」の削除後に残るもの）
+- もう 1 つ、LMI のキャパシティプロバイダのロググループも残る。これは残す理由が無く、IaC の管理外にあるだけ（下記「`dev` での検証結果」の「LMI」。#71 で消えるようにする）
 
 ### LocalStack での検証結果
 
@@ -278,6 +279,29 @@ LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` 
   - 費用はアセット用の S3 バケットの保管料だけで、決定時点で 5 件・約 1.4 MB（月 1 円に満たない）。古い版は 30 日で消えるライフサイクルが入っている。コンテナ用の ECR リポジトリは空。アセットは中身が変わるデプロイのたびに新しいキーで増え、古いものは自動では消えない
   - 再デプロイでは `scripts/stack.sh dev up` が毎回 `bootstrap` を呼ぶため、残っていれば何もせずに終わり、消えていれば作り直す。どちらでも手順は変わらない
   - 消すことになったら、アセット用の S3 バケットを古い版まで含めて空にしてからスタックを削除する（バケットに中身があるとスタックの削除が失敗する）
+
+#### LMI（2026-10-17。#66）
+
+LocalStack では使えない LMI（下記「LMI（Lambda Managed Instances）」）を、`dev` で動かして確かめた（08 #36）。`scripts/stack.sh dev up` の後、`scripts/batch.sh dev run` で実行し、AWS CLI で状態を読んだ。
+
+| 点 | 結果 | 確かめ方 |
+|---|---|---|
+| 起動したインスタンス | **3 台とも `m7g.large`**（`ap-northeast-1a` / `1c` / `1d` に 1 台ずつ）。候補の `m6g.large` は選ばれなかった（10/15 の起動でも 3 台とも `m7g.large`）。CDK のデプロイの途中（完了の約 3 分前）に起動し、実行環境も 1 台に 1 つずつ、計 3 つ初期化された | `describe-instances --include-managed-resources`。キャパシティプロバイダのロググループ（下記）の `InstanceLifecycle` のログ |
+| インスタンスが見えるか | **`describe-instances` の既定の応答には出ない。** LMI のインスタンスは `Operator`（`Managed: true`・`Principal: scaler.lambda.amazonaws.com`・`HiddenByDefault: true`）付きで、`--include-managed-resources` を付けたときだけ出る。付けないと、動いていても 0 件に見える | 同じ時点で、付けた場合（3 件）と付けない場合（0 件）を比べた |
+| パブリック IP | **3 台とも付いた。** サブネットの自動割り当て（`map_public_ip_on_launch`）で足りる。料金はパブリック IPv4 の 1 アドレス $0.005/時 | `describe-instances --include-managed-resources` の `PublicIpAddress` |
+| 実行環境数を最小・最大 1 にして台数が減るか | **減る。** 起動の約 8 分後に 2 台が終了し、1 台になった（10/15 も約 10 分後に同じ動き）。起動直後は設定にかかわらず 3 台・3 環境で始まる。`get-function-scaling-config` の `AppliedFunctionScalingConfig` は最小・最大 1 | キャパシティプロバイダのログ。`describe-instances --include-managed-resources` |
+| 呼び出される版 | ステートマシンは修飾子なしの ARN で呼ぶが、**実行は `$LATEST.PUBLISHED` で動く**（プラットフォームログの `functionArn`） | データ連携 Lambda のロググループの `platform.start` |
+| 非同期の再試行 0 が効くか | **確かめられていない。** 設定（`MaximumRetryAttempts: 0`）は `$LATEST` にだけあり、`$LATEST.PUBLISHED` には無い（`ResourceNotFoundException`）。ハンドラは例外を投げないため、再試行は通常の実行では起きず観測できない。JSON でない入力で関数エラーを起こそうとしたが、Lambda が API の段階で拒否した（`InvalidRequestContentException`。関数は呼ばれない）。`$LATEST.PUBLISHED` にも設定を付けて確かめる（#70） | `list-function-event-invoke-configs`・`get-function-event-invoke-config` |
+| 通常の実行 | **`SUCCEEDED`。** メール送信スタブ 3 件・S3 の連携ファイル・BigQuery / Cuenote FC スタブのログがそろい、Slack スタブのログは出なかった | `scripts/batch.sh dev run`・`logs` |
+| `failAt: "dataSync"` | **`FAILED`（`InjectedFailureError`）。** データ連携 Lambda が `SendTaskFailure` で返し、Slack スタブのログに実行 ARN・`FAILED`・エラー名が出た | `scripts/batch.sh dev run dataSync`・`logs` |
+| `holdSeconds: 960` | **`SUCCEEDED`。** 実行は 16 分 2.6 秒、データ連携 Lambda の実行時間は 961.9 秒で、15 分を超えた。待つ間に 3 台のうち 2 台が終了したが、実行していた環境は残った 1 台にあり、途切れなかった。最後の `SendTaskSuccess` が通り、長い実行の間に認証情報・接続は切れなかった | `scripts/batch.sh dev run --hold-seconds 960`（最大 1,320 秒待つ） |
+| 費用 | 3 台の間は約 $0.38/時（`m7g.large` の EC2 $0.1054/時 + 管理料 $0.01581/時 + パブリック IPv4 $0.005/時、の 3 台分）、1 台になってからは約 $0.126/時。今回の検証（インスタンスの起動から最後の終了まで約 35 分）で約 $0.1 | Pricing API（2026-10-17 時点の東京の単価） |
+
+確認の後、`scripts/stack.sh dev down` でエラーなく削除でき、次のとおりになった。
+
+- インスタンスは `describe-instances --include-managed-resources` で 0 件（終了済みを除く）。同じ条件で全状態を出すと 3 台とも `terminated` で、検査が空振りしていないことも確かめた。キャパシティプロバイダ・VPC・パブリック IPv4 も 0 件
+- これまでと同じく、`serverless-practice-app-dev-*` のリソースと Terraform の state は 0 件
+- **キャパシティプロバイダのロググループ `/aws/lambda/capacity-provider/serverless-practice-app-dev-lmi` は残る。** 最初のインスタンスの起動時に LMI のサービスが自動で作る（作成は 10/15 の検証時）もので、Terraform・CDK の管理外。保持期間は無期限で、量は約 2.4 KB。IaC で作って `down` で消えるようにする（#71）。それまでは残しておき、次のデプロイでも同じものが使われる
 
 ## CI とマージの条件
 
@@ -348,7 +372,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 
 実行入力に検証用の `holdSeconds`（整数、0〜1,200。省略時は 0）を足す。データ連携 Lambda は、スタブへの書き込みを終えてから結果を返すまでの間、その秒数だけ待つ（待つ間もハートビートを送る）。`dev` では `holdSeconds: 960`（16 分）で、15 分を超えて `SUCCEEDED` になることを確かめる。上限 1,200 秒は、関数のタイムアウトに収めつつ、待つ分の EC2 料金を抑えるための値。
 
-`failAt` と同じく失敗・遅延の注入であり、定時起動（入力 `{}`）では使わない。入力の検証は 06 に足す。
+`failAt` と同じく失敗・遅延の注入であり、定時起動（入力 `{}`）では使わない。入力の検証は 06 に足す。手動では `scripts/batch.sh dev run --hold-seconds 960` で起動する。スクリプトが結果を待つ上限は、既定の 360 秒に `holdSeconds` を足した秒数にする（#66）。範囲外や数値でない値も検証エラーを確かめられるようにそのまま渡し、待つ秒数には足さない。
 
 上限 1,200 秒は `dev`（LMI）に合わせた値で、`local` でも同じ範囲を受け付ける。`local` の関数は 900 秒でタイムアウトするため、900 秒近くまで待つ値では結果を返せず、`DataSync` のタイムアウト（960 秒）で `FAILED`（`States.Timeout`）になる。`local` で使うのは IT の短い値（61 秒）だけにする。
 
@@ -367,7 +391,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 
 - VPC 1 つ、パブリックサブネットを 3 つ（AZ ごと。既定の 3 台が AZ に分かれて起動するため）、IGW、`0.0.0.0/0` を IGW へ向けるルートテーブル
 - セキュリティグループは受信なし、送信は HTTPS（443）のみ
-- インスタンスにパブリック IP が自動で付くか（サブネットの自動割り当てで足りるか）と、その料金は公式で確かめられなかった。`dev` で確かめる
+- インスタンスにパブリック IP が自動で付くか（サブネットの自動割り当てで足りるか）と、その料金は公式で確かめられなかった。`dev` で確かめ、付いた（「`dev` での検証結果」の「LMI」。#66）
 
 ### キャパシティプロバイダと関数の設定
 
@@ -377,14 +401,14 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 | 使うインスタンスタイプ | `m6g.large`・`m7g.large` に絞る | 費用の上限を読めるようにする（絞らないと選ばれるタイプが保証されない） |
 | vCPU の上限 | 12 | API の下限（12）。`.large`（2 vCPU）6 台分。想定外の拡大で費用が膨らまないようにする。設計では 6（3 台分）としたが、API が 12 未満を受け付けなかった |
 | 関数のメモリ | 2,048 MB（vCPU あたり 2 GiB、1 vCPU） | LMI の最小構成 |
-| 関数の実行環境数 | 最小 1・最大 1 を試す | 既定（最小 3）より台数を減らせるかを `dev` で確かめる。できなければ既定のまま記録する |
+| 関数の実行環境数 | 最小 1・最大 1 を試す | 既定（最小 3）より台数を減らせるかを `dev` で確かめる。できなければ既定のまま記録する。**減った**: 起動直後は 3 台で、約 8 分後に 1 台になる（「`dev` での検証結果」の「LMI」。#66） |
 
 データ連携 Lambda は、モジュールに持つのが状態を持たない S3 クライアントと読み取り専用の定数だけで、並行処理で壊れるグローバル状態は無い（2026-10-13 に確認）。
 
 実行が長くなることへの注意:
 
 - **冪等性**: 1 回の実行が長いほど、途中で失敗して `Retry` や手動の再実行で同じ処理が繰り返される影響が大きくなる。データ連携は同じ実行名なら同じ S3 キーに上書きする（05「連携ファイル」）が、スタブ（BigQuery・Cuenote FC）への書き込みは重なる。補償処理を持たない方針（03「データ連携 Lambda」）は変えない
-- **認証情報・接続**: 実行が長い間に、実行ロールの一時的な認証情報や SDK の接続が切れないかは確かめていない。`holdSeconds: 960` の実行の最後に `SendTaskSuccess` が通ることで確かめる
+- **認証情報・接続**: 実行が長い間に、実行ロールの一時的な認証情報や SDK の接続が切れないかは確かめていない。`holdSeconds: 960` の実行の最後に `SendTaskSuccess` が通ることで確かめる。**通った**（「`dev` での検証結果」の「LMI」。#66）
 
 ### IaC の責務
 
@@ -397,17 +421,18 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 
 `local` にも同じ IaC をデプロイする（01「制約・前提」）。ただし **LMI の部分（VPC・キャパシティプロバイダとそのロール・SSM の `capacity-provider/arn`・関数の紐付け）は `dev` でだけ作る。** 本デモが使う LocalStack の Hobby プランでは LMI の API（`CreateCapacityProvider`）を使えなかったため（2026-10-13 に確認）。条件は Terraform（`lmi.tf` の `stage == "dev"`）と CDK（`LMI_STAGES`）の両方に置き、CDK の UT で `local` では紐付けないことを固定する。
 
-`local` でも `DataSync` の呼び出し方（`.waitForTaskToken` + `InvocationType: "Event"`）・ハートビート・`SendTask*` で結果を返す流れは `dev` と同じで、関数は通常の Lambda として動く。そのため IT で、結果の返し方を変えても今のケースが通ることと、短い `holdSeconds` で `SUCCEEDED` になることを確かめられる（08 #35）。`.waitForTaskToken` と `InvocationType: "Event"` の併用は、LocalStack では動いた。実 AWS では #66 で確かめる。
+`local` でも `DataSync` の呼び出し方（`.waitForTaskToken` + `InvocationType: "Event"`）・ハートビート・`SendTask*` で結果を返す流れは `dev` と同じで、関数は通常の Lambda として動く。そのため IT で、結果の返し方を変えても今のケースが通ることと、短い `holdSeconds` で `SUCCEEDED` になることを確かめられる（08 #35）。`.waitForTaskToken` と `InvocationType: "Event"` の併用は、LocalStack でも実 AWS（#66）でも動いた。
 
 ### 費用と消し忘れへの備え
 
 - 動かしている間だけ課金される。`m6g.large` 3 台なら、EC2 と管理料を合わせて約 $0.34/時（東京、2026-10-12 時点の単価）。`dev` の 1 回の検証（約 1 時間）で約 $0.35 を見込む
+  - **実測（#66）**: 選ばれたのは `m7g.large` で、パブリック IPv4 も加わり 3 台で約 $0.38/時。約 8 分後に 1 台に減り、以降は約 $0.126/時。検証 1 回（約 35 分）で約 $0.1 だった（「`dev` での検証結果」の「LMI」）。候補を複数並べると、安い方が選ばれるとは限らないため、見積もりは候補のうち高い方で行う
 - `scripts/stack.sh dev up` で作り、確かめたら `scripts/stack.sh dev down` で消す、という今の運用に乗せる。削除後は何も課金されない（state バケット・`CDKToolkit` の保管料を除く。「`dev` での検証結果」）
-- 消し忘れると 1 日で約 $8 かかる。**AWS Budgets** の予算アラートを置き、超えたらメールで知らせる（下記「予算アラート」。#65）。予算はアカウント単位で、`down` で消えては困るため、`dev` の Terraform では管理しない。state バケットと同じく冪等なスクリプトで作る
+- 消し忘れると 1 日で約 $8 かかる（3 台のままの計算。実測では 1 台に減るため約 $3.03/日で、下記の予算 3 USD をかろうじて越えるだけになる。額を見直す: #72）。**AWS Budgets** の予算アラートを置き、超えたらメールで知らせる（下記「予算アラート」。#65）。予算はアカウント単位で、`down` で消えては困るため、`dev` の Terraform では管理しない。state バケットと同じく冪等なスクリプトで作る
 
 #### 予算アラート
 
-**設計・実装は 2026-10-14（#65）。** `dev` のアカウントに作ったかどうかは #66 の最初に確かめる。前提の事実は公式ドキュメントで確かめた（2026-10-14。[料金](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/)・[更新の頻度](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)・[アラート](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html)）。
+**設計・実装は 2026-10-14（#65）。** `dev` のアカウントには 2026-10-15 に作り、#66 の最初（2026-10-17）に、予算（`COST`・日次・3.0 USD）があることを確かめた。`--check` は、AWS が省く `ThresholdType` をずれと判定して 1 で終わる（#69）。前提の事実は公式ドキュメントで確かめた（2026-10-14。[料金](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/)・[更新の頻度](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)・[アラート](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-best-practices.html)）。
 
 - 通知だけの予算は無料（有料なのは budget action を付けた予算だけ）
 - 予算の値の更新は 1 日に最大 3 回で、間隔は 8〜12 時間。請求そのものにも遅れがあるため、気づけるのは数時間〜翌日になる
@@ -444,7 +469,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 | UT（handler） | 成功で `SendTaskSuccess`、想定した失敗で `SendTaskFailure`（エラー名・`cause` の形）を呼ぶ。`holdSeconds` の間にハートビートを送る。`SendTask*` が失敗したらエラーログを出す。`holdSeconds` の境界（0・1,200・範囲外・小数） |
 | UT（CDK） | `DataSync` が `.waitForTaskToken` と `InvocationType: "Event"` で呼ばれる。タスクのタイムアウト・ハートビート、関数のタイムアウト・キャパシティプロバイダの紐付け・非同期の再試行 0 |
 | IT（LocalStack） | 今のケース（08 #20〜#27・#32）が、結果の返し方を変えても通る。短い `holdSeconds` で `SUCCEEDED` になる |
-| 手動（`dev`） | 起動したインスタンスの台数・タイプ・パブリック IP。通常の実行と `failAt: "dataSync"` の結果と通知。`holdSeconds: 960` で 15 分を超えて `SUCCEEDED` になる。削除後にインスタンス・プロバイダ・VPC が 0 件になる |
+| 手動（`dev`） | 起動したインスタンスの台数・タイプ・パブリック IP。通常の実行と `failAt: "dataSync"` の結果と通知。`holdSeconds: 960` で 15 分を超えて `SUCCEEDED` になる。削除後にインスタンス・プロバイダ・VPC が 0 件になる。インスタンスは `describe-instances` の既定では見えないため、`--include-managed-resources` を付けて数える（#66 の結果は「`dev` での検証結果」の「LMI」） |
 
 ### 実装で設計から変えた点
 

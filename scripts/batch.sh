@@ -3,8 +3,10 @@
 # README と手動確認の手順からはこのスクリプトを呼ぶだけにする（.claude/rules/duplication.md）。
 #
 # 使い方:
-#   scripts/batch.sh <stage> run [failAt]    実行を起動し、終わるまで待って結果を出す
+#   scripts/batch.sh <stage> run [failAt] [--hold-seconds <秒>]
+#                                            実行を起動し、終わるまで待って結果を出す
 #                                            failAt: enqueue / dataSync / consumer（省略で失敗を注入しない）
+#                                            --hold-seconds: データ連携 Lambda が結果を返す前に待つ秒数（docs/02「F-6」）
 #   scripts/batch.sh <stage> logs <実行名>   4 つの Lambda のログから、その実行名を含む行だけを出す
 #   scripts/batch.sh <stage> dlq             DLQ のメッセージ数を出す
 #
@@ -13,18 +15,22 @@
 # （終わったかどうか分からない状態を、成功扱いにしない）。
 #
 # 環境変数:
-#   BATCH_WAIT_SECONDS   run で待つ最大秒数（既定: 360。ステートマシンのタイムアウト 5 分より長くする）
+#   BATCH_WAIT_SECONDS   run で待つ最大秒数（既定: 360 + holdSeconds。待たせない実行は数十秒で終わるため 360 秒で足り、
+#                        holdSeconds を付けたらその分だけ延ばす）
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/aws-stage.sh
 source "${REPO_ROOT}/scripts/lib/aws-stage.sh"
 
-WAIT_SECONDS="${BATCH_WAIT_SECONDS:-360}"
+# holdSeconds を付けない実行で待つ最大秒数
+BASE_WAIT_SECONDS=360
+# holdSeconds の上限（docs/02「データ項目」）。これを超える値は検証エラーですぐ終わるため、待つ秒数に足さない
+MAX_HOLD_SECONDS=1200
 FUNCTIONS="enqueue consumer data-sync notify-slack"
 
 usage() {
-  echo "使い方: $0 {local|dev} run [enqueue|dataSync|consumer]" >&2
+  echo "使い方: $0 {local|dev} run [enqueue|dataSync|consumer] [--hold-seconds <秒>]" >&2
   echo "        $0 {local|dev} logs <実行名>" >&2
   echo "        $0 {local|dev} dlq" >&2
   exit 2
@@ -60,10 +66,50 @@ state_machine_arn() {
 }
 
 run() {
-  [[ $# -le 1 ]] || usage
-  # 未定義の値も、そのまま渡せるようにする（検証エラーで FAILED になることを確かめるため。docs/02「F-6」）
+  # bash 3.2 の set -u では空の配列を展開できないため、配列を使わずに受ける
+  local fail_at="" has_fail_at=0 hold_seconds="" has_hold_seconds=0
+  while (($# > 0)); do
+    case "$1" in
+      --hold-seconds)
+        (($# >= 2)) || usage
+        hold_seconds="$2"
+        has_hold_seconds=1
+        shift 2
+        ;;
+      # 綴りを誤ったオプションを failAt として起動しない
+      -*) usage ;;
+      *)
+        ((has_fail_at == 0)) || usage
+        fail_at="$1"
+        has_fail_at=1
+        shift
+        ;;
+    esac
+  done
+
+  # 未定義の値も、そのまま渡せるようにする（検証エラーで FAILED になることを確かめるため。docs/02「F-6」）。
+  # holdSeconds は JSON の数値として読める形（1.5・-1 を含む）なら数値で、それ以外は文字列で渡す
   local input
-  input="$(python3 -c 'import json, sys; print(json.dumps({"failAt": sys.argv[1]} if len(sys.argv) > 1 else {}))' "$@")"
+  input="$(python3 -c '
+import json, re, sys
+has_fail_at, fail_at, has_hold_seconds, hold_seconds = sys.argv[1:]
+body = {}
+if has_fail_at == "1":
+    body["failAt"] = fail_at
+if has_hold_seconds == "1":
+    is_number = re.fullmatch(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?", hold_seconds)
+    body["holdSeconds"] = json.loads(hold_seconds) if is_number else hold_seconds
+print(json.dumps(body))
+' "$has_fail_at" "$fail_at" "$has_hold_seconds" "$hold_seconds")"
+
+  local wait_seconds="${BATCH_WAIT_SECONDS:-}"
+  if [[ -z "$wait_seconds" ]]; then
+    wait_seconds=$BASE_WAIT_SECONDS
+    # 桁数を先に見て、bash の整数の範囲を超える値で計算しない
+    if [[ "$hold_seconds" =~ ^(0|[1-9][0-9]{0,3})$ ]] && ((hold_seconds <= MAX_HOLD_SECONDS)); then
+      wait_seconds=$((wait_seconds + hold_seconds))
+    fi
+  fi
 
   local arn name execution_arn
   arn="$(state_machine_arn)"
@@ -72,9 +118,9 @@ run() {
   execution_arn="$(aws stepfunctions start-execution \
     --state-machine-arn "$arn" --name "$name" --input "$input" \
     --query executionArn --output text)"
-  echo "起動しました: ${name}（入力: ${input}）"
+  echo "起動しました: ${name}（入力: ${input}、最大 ${wait_seconds} 秒待ちます）"
 
-  local deadline=$((SECONDS + WAIT_SECONDS)) status
+  local deadline=$((SECONDS + wait_seconds)) status
   while ((SECONDS < deadline)); do
     status="$(aws stepfunctions describe-execution --execution-arn "$execution_arn" --query status --output text)"
     if [[ "$status" != "RUNNING" ]]; then
@@ -97,7 +143,7 @@ print("原因: " + (cause if cause is not None else "-"))
     fi
     sleep 2
   done
-  echo "エラー: ${WAIT_SECONDS} 秒待っても実行 ${name} が終わりません（状態: RUNNING）" >&2
+  echo "エラー: ${wait_seconds} 秒待っても実行 ${name} が終わりません（状態: RUNNING）" >&2
   return 1
 }
 
