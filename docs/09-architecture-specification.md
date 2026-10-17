@@ -100,6 +100,8 @@ BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（
 
 `Enqueue（投入）→ DataSync（データ連携）` を順に実行する。Lambda タスクには一時的なエラー（`Lambda.ServiceException` 等）のみ `Retry` を付ける。`DataSync` は非同期で呼び、データ連携 Lambda がタスクトークンで結果を返すまで待つ（「LMI」）。Consumer は SQS イベントソースで起動し、Step Functions の外で動く（元資料の「コレオグラフィ」部分）。
 
+ステートマシンの種類は **Standard**。`DataSync` が使う `.waitForTaskToken` と、失敗の通知に使う EventBridge への状態変化イベントは、どちらも Standard でしか使えないため（[公式](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html)）。今は CDK で種類を指定しておらず、CDK の既定（`STANDARD`）に頼っている（2026-10-17 に、合成したテンプレートに `StateMachineType` が出ないことを確かめた）。明示と UT での固定は #90。
+
 ## システム構成図
 
 ```mermaid
