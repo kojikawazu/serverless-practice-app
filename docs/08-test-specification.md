@@ -17,7 +17,7 @@
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3・Step Functions）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン・`DataSync` の呼び出し方・LMI の紐付け） |
-| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない |
+| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` も、終わらない・失敗する実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる点（Scheduler の定時起動・状態変化イベントによる通知・LMI での実行）。結果は 09「`dev` での検証結果」 |
@@ -67,7 +67,7 @@
 | 33 | `dev` で定時の Schedule（`cron`）が実行を起動し、入力 `{}` の実行が `SUCCEEDED` になる（式の時・分だけを数分先へ一時的に変えて確かめる。09「`dev` での検証結果」） | 手動 | 正常系 |
 | 34 | `dev` で実行全体のタイムアウトを越えた実行が `TIMED_OUT` になり、Slack スタブのログに実行 ARN と `TIMED_OUT` が出る。実行と通知の `error` / `cause` の値を記録する（#32 と同じ手順を AWS CLI で行う） | 手動 | 準正常系 |
 | 35 | `holdSeconds: 61` の実行が、データ連携 Lambda の待ちの後に `SUCCEEDED` になり、実行時間が 61 秒以上で、S3 にファイルが 1 つできる（非同期の呼び出し・ハートビート・`SendTaskSuccess` の流れの確認） | IT | 正常系 |
-| 36 | `dev` でデータ連携 Lambda が LMI で動く。インスタンスの台数・タイプ・パブリック IP、`holdSeconds: 960` で 15 分を超えて `SUCCEEDED`、`failAt: "dataSync"` で `FAILED` と通知、削除後にインスタンス・プロバイダ・VPC が残らないこと（09「LMI」の「テスト」。#66） | 手動 | 正常系 |
+| 36 | `dev` でデータ連携 Lambda が LMI で動く。インスタンスの台数・タイプ・パブリック IP、`holdSeconds: 960` で 15 分を超えて `SUCCEEDED`、`failAt: "dataSync"` で `FAILED` と通知、削除後にインスタンス・プロバイダ・VPC が残らないこと。インスタンスは `describe-instances --include-managed-resources` で数える（既定では見えない）（09「LMI」の「テスト」。結果は 09「`dev` での検証結果」。#66） | 手動 | 正常系 |
 | 37 | データ連携: `holdSeconds` があれば、書き出しの後に 60 秒ごとにハートビートを送りながら待ってから `SendTaskSuccess` を返す。0 なら待たずハートビートも送らない。上限の 1,200 秒は受け付ける | UT | 正常系 |
 | 38 | データ連携: タスクトークンが読めれば、入力の不正・注入エラーを `SendTaskFailure` で返し（`error` はエラー名、`cause` は `errorType` / `errorMessage` の JSON）、例外を投げない | UT | 準正常系 |
 | 39 | データ連携: `SendTaskSuccess`・ハートビートが失敗したら `SendTaskFailure` で返し、`SendTaskFailure` も失敗したらエラーログを出して終える。`cause` のメッセージは 4,096 文字で切り詰める | UT | 異常系 |
@@ -78,6 +78,9 @@
 | 44 | 予算アラートのスクリプト: 額・通知先・余分な通知のずれだけを直す。通知の一覧が `NotFoundException` でも、予算があれば通知 0 件として扱う | UT | 準正常系 |
 | 45 | 予算アラートのスクリプト: `--check` のずれ・確認での中止・同名で期間の違う予算は、何も変えずに 1 で終わる。引数・通知先の誤りは AWS を呼ばずに 2 で終わる。画面のメールアドレスは伏せる | UT | 準正常系 |
 | 46 | 予算アラートのスクリプト: 読めない（権限不足）・作成の失敗・反映されない（API は成功）は 1 で終わる。読めないことを「無い」とみなして作らない | UT | 異常系 |
+| 47 | 実行のスクリプト（`batch.sh run`）: `failAt` と `--hold-seconds`（順不同）を入力に入れ、`holdSeconds` は数値で渡す。待つ上限は 360 秒 + `holdSeconds`。`FAILED` でも終われば 0 で終わり、`cause` はメッセージだけを出す | UT | 正常系 |
+| 48 | 実行のスクリプト: 範囲外・小数・数値でない `holdSeconds` は検証させるためにそのまま渡し、待つ上限を延ばさない。`BATCH_WAIT_SECONDS` が既定より優先される。値の無いオプション・未知のオプション・2 つ目の `failAt` は起動せずに 2 で終わる | UT | 準正常系 |
+| 49 | 実行のスクリプト: 待つ上限を過ぎても `RUNNING` なら 1 で終わる。ステートマシンの一覧を取れない（認証切れ）・見つからないは、それぞれ別のメッセージで起動せずに 1 で終わる | UT | 異常系 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 
