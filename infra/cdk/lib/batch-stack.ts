@@ -153,7 +153,8 @@ export class BatchStack extends Stack {
         timeout: Duration.seconds(dataSyncTimeoutSeconds),
         memorySize: DATA_SYNC_MEMORY_MB,
         // 非同期の呼び出しの再試行（既定 2 回）を止め、同じタスクトークンで処理を二重に走らせない。
-        // 関数は結果を返したら投げない作りだが、設定でも止める（LMI の $LATEST.PUBLISHED に効くかは dev で確かめる）
+        // 関数は結果を返したら投げない作りだが、設定でも止める。付くのは $LATEST の設定だけだが、LMI で実行が
+        // $LATEST.PUBLISHED に回る修飾子なしの呼び出しにも、この設定が効く（docs/09「`dev` での検証結果」の「LMI」。#70）
         retryAttempts: 0,
         // LMI は AWS SDK v3 3.933.0 以上を求める。ランタイム同梱の SDK の版に頼らず、ロックファイルの版を同梱する
         bundleAwsSdk: true,

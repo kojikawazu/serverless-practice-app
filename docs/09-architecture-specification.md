@@ -291,7 +291,7 @@ LocalStack では使えない LMI（下記「LMI（Lambda Managed Instances）�
 | パブリック IP | **3 台とも付いた。** サブネットの自動割り当て（`map_public_ip_on_launch`）で足りる。料金はパブリック IPv4 の 1 アドレス $0.005/時 | `describe-instances --include-managed-resources` の `PublicIpAddress` |
 | 実行環境数を最小・最大 1 にして台数が減るか | **減る。** 起動の約 8 分後に 2 台が終了し、1 台になった（10/15 も約 10 分後に同じ動き）。起動直後は設定にかかわらず 3 台・3 環境で始まる。`get-function-scaling-config` の `AppliedFunctionScalingConfig` は最小・最大 1 | キャパシティプロバイダのログ。`describe-instances --include-managed-resources` |
 | 呼び出される版 | ステートマシンは修飾子なしの ARN で呼ぶが、**実行は `$LATEST.PUBLISHED` で動く**（プラットフォームログの `functionArn`） | データ連携 Lambda のロググループの `platform.start` |
-| 非同期の再試行 0 が効くか | **確かめられていない。** 設定（`MaximumRetryAttempts: 0`）は `$LATEST` にだけあり、`$LATEST.PUBLISHED` には無い（`ResourceNotFoundException`）。ハンドラは例外を投げないため、再試行は通常の実行では起きず観測できない。JSON でない入力で関数エラーを起こそうとしたが、Lambda が API の段階で拒否した（`InvalidRequestContentException`。関数は呼ばれない）。`$LATEST.PUBLISHED` にも設定を付けて確かめる（#70） | `list-function-event-invoke-configs`・`get-function-event-invoke-config` |
+| 非同期の再試行 0 が効くか | **効く（2026-10-17 に確かめた。#70）。** 設定（`MaximumRetryAttempts: 0`）は `$LATEST` にだけあるが、**非同期の呼び出しの設定は、呼び出し側が指定した修飾子で決まり、実行される版では決まらない。** 修飾子なしの呼び出し（ステートマシンの呼び方）は、実行が `$LATEST.PUBLISHED` に回っても `$LATEST` の設定で再試行する。環境変数 `STAGE` を不正な値にして関数を必ず投げさせ、`{}` を Event で直接呼んで、4 分半の間の `platform.start` を数えた（再試行は同じ `requestId` で約 1 分後・さらに約 2 分後に起動する）。`$LATEST`=0・`$LATEST.PUBLISHED`=0 → 1 回、`$LATEST`=0・`$LATEST.PUBLISHED`=2 → 1 回、`$LATEST`=2・`$LATEST.PUBLISHED`=0 → **3 回**（いずれも修飾子なし）、`:$LATEST.PUBLISHED` を付けて `$LATEST`=0・`$LATEST.PUBLISHED`=2 → **3 回**。再試行が起きないときは、受け付けと同じ 1 分の中で `AsyncEventsDropped` が 1 になった。したがって `$LATEST.PUBLISHED` に設定を付ける必要は無い（呼ぶ側が修飾子を付けないため） | `update-function-configuration` で `$LATEST` の環境変数を変え、`publish-version --publish-to LATEST_PUBLISHED` で `$LATEST.PUBLISHED` へ出し直した（同じ zip の `update-function-code --publish-to LATEST_PUBLISHED` では出し直されなかった）。再試行回数は `update-function-event-invoke-config` で修飾子ごとに変えた。起動はロググループの `platform.start`（`requestId`・`version`）、破棄は `AsyncEventsDropped` で数えた。変えた設定は `scripts/stack.sh dev down` でスタックごと消した |
 | 通常の実行 | **`SUCCEEDED`。** メール送信スタブ 3 件・S3 の連携ファイル・BigQuery / Cuenote FC スタブのログがそろい、Slack スタブのログは出なかった | `scripts/batch.sh dev run`・`logs` |
 | `failAt: "dataSync"` | **`FAILED`（`InjectedFailureError`）。** データ連携 Lambda が `SendTaskFailure` で返し、Slack スタブのログに実行 ARN・`FAILED`・エラー名が出た | `scripts/batch.sh dev run dataSync`・`logs` |
 | `holdSeconds: 960` | **`SUCCEEDED`。** 実行は 16 分 2.6 秒、データ連携 Lambda の実行時間は 961.9 秒で、15 分を超えた。待つ間に 3 台のうち 2 台が終了したが、実行していた環境は残った 1 台にあり、途切れなかった。最後の `SendTaskSuccess` が通り、長い実行の間に認証情報・接続は切れなかった | `scripts/batch.sh dev run --hold-seconds 960`（最大 1,320 秒待つ） |
@@ -365,6 +365,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 | 結果を返せない（タスクトークンが無い・`SendTask*` が失敗した・関数が途中で落ちた） | エラーログを 1 行出して終える | ハートビートかタスクのタイムアウトで `FAILED`（`States.HeartbeatTimeout` / `States.Timeout`）。待ち続けず、判定不能を成功にも丸めない |
 
 - Lambda 側の非同期呼び出しの再試行（既定 2 回）は **0 にする**。再試行すると同じタスクトークンで処理が二重に走り、S3・スタブへの書き込みが重なる。再試行は今と同じく Step Functions の `Retry`（呼び出しそのものの一時的なエラーだけ）に任せる
+  - 設定は関数の `$LATEST` に付けるだけでよい。非同期の呼び出しの設定は呼び出し側が指定した修飾子で決まり、修飾子なしの呼び出しは、実行が `$LATEST.PUBLISHED` に回っても `$LATEST` の設定を使う（上記「`dev` での検証結果」の「LMI」。#70）
 - 関数は、待っている間 60 秒ごとに `SendTaskHeartbeat` を送る
 - `.waitForTaskToken` と `InvocationType: "Event"` の**併用は、公式の例が見つからなかった**（禁止する記述も無い）。設計の要なので、実装の最初に LocalStack と `dev` で確かめる
 
