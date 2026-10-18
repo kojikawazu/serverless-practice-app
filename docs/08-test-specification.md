@@ -87,6 +87,7 @@
 | 53 | リンクの検査: 検査する Markdown が 0 件・git のリポジトリの外は、0 件として通さずに 1 で終わる。追跡したまま手元で消したファイルは読まずに飛ばす | UT | 異常系 |
 | 54 | データ連携 Lambda が結果もハートビートも返さない実行が、`DataSync` の `States.Timeout` で `FAILED` になる。実行の `error`・実行履歴の `TaskTimedOut` イベントの `error`・Slack スタブのログの `error` がどれも `States.Timeout`（`States.HeartbeatTimeout` ではない。09「LocalStack での検証結果」） | IT | 異常系 |
 | 55 | CDK: ステートマシンの種類を `STANDARD` と明示する。Lambda タスクが一時的なエラーとして `Retry` するのは 04「リトライ」の 4 つだけで、`Lambda.ClientExecutionTimeoutException` を含めない（公式の推奨との違いを黙って戻させない） | UT | 異常系（設定ずれの検出） |
+| 56 | CDK: Schedule の `RetryPolicy` を、最大 185 回・24 時間（`dev` で観測したサービスの既定と同じ値）と明示する（04「リトライ」） | UT | 異常系（設定ずれの検出） |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 

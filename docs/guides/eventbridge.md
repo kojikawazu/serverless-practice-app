@@ -68,7 +68,7 @@ Scheduler の配信は**少なくとも 1 回**で、「ターゲットから応
 | `MaximumRetryAttempts` | 0〜185 回 | 185 回 |
 | `MaximumEventAgeInSeconds` | 60〜86,400 秒（24 時間） | 24 時間 |
 
-既定の値は、Scheduler のユーザーガイドと API リファレンスでは上限としてしか書かれておらず、既定値として書いているのは CDK の L2 のドキュメント（`aws-scheduler-targets` の `retryAttempts` / `maxEventAge`）だった。このプロジェクトは L1 の `CfnSchedule` で `RetryPolicy` を省略しているため、効くのは CDK の既定ではなくサービス側の既定になる。その値は `get-schedule` で読んでいない（未確認）。
+既定の値は、Scheduler のユーザーガイドと API リファレンスでは上限としてしか書かれておらず、既定値として書いているのは CDK の L2 のドキュメント（`aws-scheduler-targets` の `retryAttempts` / `maxEventAge`）だった。このプロジェクトは L1 の `CfnSchedule` を使うため、省略すると効くのは CDK の既定ではなくサービス側の既定になる。サービス側の既定は、`dev` の CloudTrail の記録から **185 回・24 時間**と分かった（09「[`dev` での検証結果](../09-architecture-specification.md#dev-での検証結果)」）。今は同じ値を CDK で明示している（#92）。
 
 再試行し尽くした呼び出しは、DLQ（SQS の**標準**キュー。FIFO は使えない）を設定していれば、エラーの内容と一緒にそこへ送られる。DLQ が無ければ残らない。universal target では、`Input` の中身が作成時に検証されず、Schedule は作れても毎回の起動で失敗する（公式「Configuring a schedule's dead-letter queue」）。
 
@@ -135,7 +135,7 @@ AWS のサービスが出すイベントは、アカウント・リージョン�
 | ルールから Lambda への権限 | 関数側のリソースベースポリシー。CDK がターゲットの設定のときに付ける（IAM ロールは変えない） | 06「[認可](../06-security-specification.md#認可権限制御)」 |
 | Slack 通知 Lambda の失敗 | 対象外のイベントはエラーにせず正常に終える。通知そのものの失敗は投げ直し、Lambda の非同期の再試行（2 回）に任せる | 03「[Slack 通知 Lambda](../03-functional-specification.md#slack-通知-lambdanotify-slack)」・04「[リトライ](../04-non-functional-specification.md#リトライ)」 |
 
-Scheduler の再試行・DLQ、ルールのターゲットの再試行・DLQ は、どちらも CDK で設定しておらず、既定のまま（上記）。
+Scheduler の再試行は、サービスの既定と同じ値（185 回・24 時間）を CDK で明示している（04「[リトライ](../04-non-functional-specification.md#リトライ)」）。Scheduler の DLQ、ルールのターゲットの再試行・DLQ は、CDK で設定しておらず、既定のまま（上記）。
 
 ## 特徴と制約
 
@@ -149,15 +149,18 @@ Scheduler の再試行・DLQ、ルールのターゲットの再試行・DLQ は
 
 ### 定時の起動の実行名を、誰が付けているか
 
-`dev` の定時の起動では、実行名が UUID（例: `d56acd67-9cb6-4a25-962d-bb6d38fc8890`）だった。09 はこれを「Scheduler が付ける UUID」と書いているが、**公式の記述からは、Step Functions が付けた可能性が高い**（未確認。観測と判断は #92）。
+`dev` の定時の起動では、実行名が UUID（例: `d56acd67-9cb6-4a25-962d-bb6d38fc8890`）だった。**この UUID は Scheduler が `StartExecution` の `name` で渡している**。CloudTrail の `StartExecution` イベントで、呼び出し元が Scheduler の実行ロール、`requestParameters.name` がその UUID だった（09「[`dev` での検証結果](../09-architecture-specification.md#dev-での検証結果)」・#92）。
 
-- Scheduler の templated target には、実行名を指定する項目が無い（公式「Target」。`Input` は実行入力になる）
-- `StartExecution` は、名前を指定しないと Step Functions が UUID を実行名にする（公式「StartExecution」）
-- Scheduler の `<aws.scheduler.execution-id>` は 16 桁の英数字（公式の例）で、観測した UUID とは形が違う
+公式の記述からは、Step Functions が付けた可能性が高いと読めていた。Scheduler の templated target には実行名を指定する項目が無く（公式「Target」）、`StartExecution` は名前を指定しないと Step Functions が UUID を付ける（公式「StartExecution」）。どちらも事実だが、templated target でも Scheduler は名前を自分で付けて渡していた。**公式の記述を組み合わせた推論は、観測と逆になることがある。**
 
-違いが効くのは、Scheduler が同じ起動を 2 回呼んだとき。Standard の `StartExecution` は**同じ名前・同じ入力**のときだけ冪等になる（[Step Functions 解説](step-functions.md#実行名と冪等性)）。名前を付けずに呼んでいるなら、2 回の呼び出しは別の UUID を受け取り、**別々の実行が 2 つ始まる**。投入 Lambda の重複排除 ID は `<実行名>:<配信対象 ID>` で、実行名が違えば SQS FIFO も重複とみなさないため、メールが二重に送られる（03「[投入 Lambda](../03-functional-specification.md#投入-lambdaenqueue)」）。Scheduler の配信は少なくとも 1 回（上記）なので、起こりうる。このプロジェクトでは、同じ起動から実行が 2 つ始まったことは観測していない。
+名前が効くのは、Scheduler が同じ起動を 2 回呼んだとき。Standard の `StartExecution` は**同じ名前・同じ入力**のときだけ冪等になる（[Step Functions 解説](step-functions.md#実行名と冪等性)）。
 
-universal target（`arn:aws:scheduler:::aws-sdk:sfn:startExecution`）なら、`Input` に API の引数をそのまま書くため、`Name` で実行名を決められるはず（試していない）。ただし、同じ起動の呼び直しで同じになる値として思いつく `<aws.scheduler.scheduled-time>` は `:` を含み、実行名に使えない（公式「StartExecution」）。`<aws.scheduler.execution-id>` は試行ごとに変わるため、呼び直しの重複を防げない。実行名はこのプロジェクトでは文字を制限して検証している（06「[入力バリデーション](../06-security-specification.md#入力バリデーション)」）。
+- **やり直しで同じ名前を使うなら**、2 回目は実行中の同じ実行を返すか（実行中）、`ExecutionAlreadyExists` になる（終わった後）。実行は 1 つで済む
+- **名前が変わるなら**、別の実行がもう 1 つ始まる。投入 Lambda の重複排除 ID は `<実行名>:<配信対象 ID>` で、実行名が違えば SQS FIFO も重複とみなさないため、メールが二重に送られる（03「[投入 Lambda](../03-functional-specification.md#投入-lambdaenqueue)」）
+
+**どちらになるかは、公式に記述が無く、観測もしていない**（観測した 2 回はどちらも 1 回目で成功した）。このプロジェクトは、防がないと決めた（04「[リトライ](../04-non-functional-specification.md#リトライ)」）。
+
+防ぐなら、universal target（`arn:aws:scheduler:::aws-sdk:sfn:startExecution`）で `Name` を渡し、起動ごとに決まった値にする必要がある（試していない）。ただし、Scheduler が埋められる値のうち、予定の時刻（`<aws.scheduler.scheduled-time>`）は `:` を含んで実行名に使えず（公式「StartExecution」）、`<aws.scheduler.execution-id>` は試行ごとに変わる（公式「Adding context attributes」）。そのため、値を変換する Lambda などを間に足すことになる。実行名はこのプロジェクトでは文字を制限して検証している（06「[入力バリデーション](../06-security-specification.md#入力バリデーション)」）。
 
 ### `Input` を省略しない
 
@@ -177,6 +180,7 @@ Slack 通知 Lambda も、届いたイベントを検証し直す（06「[入力
 
 | 止まるところ | 公式の振る舞い | このプロジェクト |
 |---|---|---|
+| Scheduler → ステートマシン（起動そのもの） | 24 時間・185 回で、DLQ が無ければ捨てられる（上記） | DLQ は無い。起動に失敗し続けると、その日の実行が無いまま、何も通知されない（実行が始まらないので状態変化イベントも出ない） |
 | Step Functions → イベントバス | 状態変化イベントはベストエフォート（[Step Functions 解説](step-functions.md#状態変化イベントだけに通知を頼っている)） | 欠けたときの手当ては無い |
 | ルール → Lambda | 24 時間・185 回で捨てられる | DLQ は無い |
 | Lambda の関数 | 2 回の再試行で捨てられる | 失敗したイベントの送り先・DLQ は無い |
@@ -228,4 +232,5 @@ LocalStack 全体の性質は [LocalStack 解説](localstack.md#本物の-aws-�
 - [How EventBridge retries delivering events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-retry-policy.html)
 - [Using resource-based policies for Amazon EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-use-resource-based.html)
 - [StartExecution](https://docs.aws.amazon.com/step-functions/latest/apireference/API_StartExecution.html)（名前を省略したときの UUID・冪等性）
+- [Recording Step Functions API calls with AWS CloudTrail](https://docs.aws.amazon.com/step-functions/latest/dg/procedure-cloud-trail.html)（`StartExecution` は管理イベントで、イベント履歴に 90 日残る）
 - [Amazon EventBridge pricing](https://aws.amazon.com/eventbridge/pricing/)

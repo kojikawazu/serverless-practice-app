@@ -4,6 +4,19 @@
 
 新しいエントリはこの見出しの直下に追記する（新しいものが上）。
 
+## 2026-10-18 LocalStack の cdk diff（変更セット）が、Schedule の Target に足した RetryPolicy を「差分なし」と返した
+
+### 概要
+
+#92 で、CDK の `CfnSchedule` の `Target` に `RetryPolicy` を足した。同じ日の #90 の教訓に従い、デプロイの前に `npx cdklocal diff -c stage=local` を実行すると「There were no differences」だった。`--method=template` では `[+] Added: .RetryPolicy` と出た。#90 の教訓の手順だけでは、変更を見落とす。
+
+### 詳細
+
+- 何が起きたか: `RetryPolicy` の無い main の CDK で `local` のスタックを作り、今回の変更に戻して `cdklocal diff` を実行した。既定の方法（読み取り専用の変更セットを作る）は差分 0 件を返した。テンプレート同士を比べる `--method=template` では差分が出て、`replace` の印は無かった。そのまま `scripts/cdk.sh local deploy` すると、変更セットで更新され（`UPDATE_COMPLETE`）、デプロイ済みのテンプレートに `RetryPolicy` が入った。#90 の `StateMachineType`（トップレベルの項目の置換）は、同じ既定の方法で検出できていた
+- なぜ起きたか（根本原因）: LocalStack が返す変更セットの内容が、入れ子の項目（`Target.RetryPolicy`）の追加を変更として含めていなかった。どの条件で欠けるかまでは調べていない。#90 では 1 つの例（トップレベルの項目）で「`cdk diff` で分かる」と確かめ、手順として書いた。差分が 0 件のとき、「変更が無い」のか「検出できていない」のかを区別していなかった
+- 教訓 / 次からどうする: `local` で `cdk diff` を見るときは、既定の方法と `--method=template` の両方を実行する。テンプレートを変えたのに差分が 0 件なら、合格ではなく、検出の失敗として扱う（`quality-gate.md`「『対象が 0 件』と『検査して 0 件』を区別する」）。置換の有無は、公式リファレンスの「Update requires」でも確かめる
+- 関連: #92、本ログの 2026-10-18「既定に頼っていた StateMachineType を明示しただけで、CloudFormation が置換とみなしてデプロイが失敗した」（この教訓の手順を補う）、[CDK 解説](guides/cdk.md#明示しただけで作り直しになることがある)
+
 ## 2026-10-18 既定に頼っていた StateMachineType を明示しただけで、CloudFormation が置換とみなしてデプロイが失敗した
 
 ### 概要

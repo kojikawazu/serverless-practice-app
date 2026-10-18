@@ -263,6 +263,17 @@ describe("BatchStack（local）", () => {
       });
     });
 
+    it("#92: Schedule の再試行は 185 回・24 時間と明示する（既定に頼らず、dev で観測した既定と同じ値にする）", () => {
+      template.hasResourceProperties("AWS::Scheduler::Schedule", {
+        Target: {
+          RetryPolicy: {
+            MaximumRetryAttempts: 185,
+            MaximumEventAgeInSeconds: 86400,
+          },
+        },
+      });
+    });
+
     it("#90: ステートマシンの種類は Standard（.waitForTaskToken と状態変化イベントは Standard でしか使えない）", () => {
       template.hasResourceProperties("AWS::StepFunctions::StateMachine", {
         StateMachineType: "STANDARD",
