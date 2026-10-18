@@ -4,19 +4,22 @@ import {
   abortExecution,
   findExportKeys,
   findStubLogs,
+  findTaskTimedOutEvents,
   pollUntil,
   purgeQueue,
   receiveRecipientIds,
   resolveResources,
+  restoreDataSyncHeartbeat,
   restoreExecutionTimeout,
   runExecution,
   setEventSourceEnabled,
+  shortenDataSyncHeartbeat,
   shortenExecutionTimeout,
   sleep,
 } from "./helpers/localstack";
 import type { DeployedResources } from "./helpers/localstack";
 
-// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27・#32）。
+// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27・#32・#54）。
 // 前提: scripts/localstack.sh up → scripts/stack.sh local up
 //
 // ケースは順番に実行する（concurrent を付けない。同じファイルのテストは既定で順番に走る）。
@@ -50,6 +53,8 @@ beforeAll(async () => {
   await setEventSourceEnabled(resources.consumerEventSourceUuid, true);
   // 前回の IT が TIMED_OUT のケースの途中で止まると、定義が書き換わったまま残り、以後の実行がすべて TIMED_OUT になるため戻す
   await restoreExecutionTimeout(resources.stateMachineArn);
+  // 同じく、ハートビートのケースの途中で止まると、以後の holdSeconds 付きの実行がハートビート切れで落ちるため戻す
+  await restoreDataSyncHeartbeat(resources.stateMachineArn);
   // 前回の中断した IT・手動実行が残したメッセージは、同じグループの今回のメッセージを止めるため消す
   await purgeQueue(resources.queueUrl);
   await purgeQueue(resources.dlqUrl);
@@ -219,6 +224,38 @@ describe("バッチの実行（LocalStack）", () => {
         executionArn: execution.executionArn,
         status: "TIMED_OUT",
         error: null,
+        cause: null,
+      }),
+    ]);
+  });
+
+  it("データ連携が結果もハートビートも返さない: DataSync が States.Timeout で失敗して FAILED になり、Slack スタブに出る", async () => {
+    const name = `${RUN_ID}-heartbeat`;
+    // 本番のハートビート（300 秒）を待たずに切らすため、この実行の間だけ DataSync のハートビートを 2 秒にする。
+    // holdSeconds（10 秒）の間、関数は最初の 1 回しかハートビートを送らないため、結果を返す前に切れる
+    await shortenDataSyncHeartbeat(resources.stateMachineArn);
+    let execution;
+    try {
+      execution = await runExecution(resources.stateMachineArn, name, {
+        holdSeconds: 10,
+      });
+    } finally {
+      await restoreDataSyncHeartbeat(resources.stateMachineArn);
+    }
+
+    // エラー名は LocalStack で観測した値（実 AWS は未観測。docs/09「LocalStack での検証結果」）。
+    // States.HeartbeatTimeout ではない。タスクのタイムアウト（960 秒）はこの IT の待ちより長いため、
+    // FAILED になったのはハートビートが切れたから（定義を書き換えない同じ入力は SUCCEEDED になる。08 #35 と同じ流れ）
+    expect(execution.status).toBe("FAILED");
+    expect(execution.error).toBe("States.Timeout");
+    expect(await findTaskTimedOutEvents(execution.executionArn)).toEqual([
+      { resourceType: "lambda", error: "States.Timeout" },
+    ]);
+    expect(await waitForSlackLogs(name)).toEqual([
+      expect.objectContaining({
+        executionArn: execution.executionArn,
+        status: "FAILED",
+        error: "States.Timeout",
         cause: null,
       }),
     ]);

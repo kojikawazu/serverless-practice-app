@@ -263,6 +263,28 @@ describe("BatchStack（local）", () => {
       });
     });
 
+    it("#90: ステートマシンの種類は Standard（.waitForTaskToken と状態変化イベントは Standard でしか使えない）", () => {
+      template.hasResourceProperties("AWS::StepFunctions::StateMachine", {
+        StateMachineType: "STANDARD",
+      });
+    });
+
+    it("#90: 一時的なエラーとして Retry するのは、呼び出しが関数に届いていないと分かる 4 つだけ（ClientExecutionTimeoutException は含めない）", () => {
+      const { States } = stateMachineDefinition(json);
+      const transient = [
+        "Lambda.ServiceException",
+        "Lambda.AWSLambdaException",
+        "Lambda.SdkClientException",
+        "Lambda.TooManyRequestsException",
+      ];
+
+      expect(States.Enqueue?.Retry?.[0]?.ErrorEquals).toEqual([
+        ...transient,
+        "EnqueuePartialFailureError",
+      ]);
+      expect(States.DataSync?.Retry?.[0]?.ErrorEquals).toEqual(transient);
+    });
+
     it("#19: どのタスクも InjectedFailureError・ValidationError を Retry しない", () => {
       const { States } = stateMachineDefinition(json);
 

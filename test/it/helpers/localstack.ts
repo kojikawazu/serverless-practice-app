@@ -15,6 +15,7 @@ import {
   ListStateMachinesCommand,
   SFNClient,
   DescribeStateMachineCommand,
+  GetExecutionHistoryCommand,
   StartExecutionCommand,
   StopExecutionCommand,
   UpdateStateMachineCommand,
@@ -86,6 +87,36 @@ type Definition = z.infer<typeof definitionSchema>;
 const timeoutBackupSchema = z.object({
   /** 元の実行全体のタイムアウト（秒）。`null` は元の定義に TimeoutSeconds が無かったこと */
   TimeoutSeconds: z.number().nullable(),
+});
+
+/** ハートビートの書き換えで触るタスクのステート名（docs/03「ステートマシン」） */
+const DATA_SYNC_STATE = "DataSync";
+
+/**
+ * 書き換えた定義の、`DataSync` のハートビートのタイムアウト（秒）。
+ * データ連携 Lambda は待ちの始めに 1 回ハートビートを送り、次は 60 秒後に送るため、
+ * `holdSeconds` をこれより長くすれば、結果を返す前に必ずハートビートが切れる
+ */
+const SHORTENED_HEARTBEAT_SECONDS = 2;
+
+/**
+ * 書き換えのとき `DataSync` の Comment に残す、元の定義の値。
+ * 元のハートビートを IT に書き写さずに戻すため、書き換えた定義そのものに持たせる。
+ * キー名は、IT が書き換えた印も兼ねる（元の定義の Comment と区別する）
+ */
+const heartbeatBackupSchema = z.object({
+  itHeartbeatBackup: z.object({
+    /** 元のハートビートのタイムアウト（秒） */
+    HeartbeatSeconds: z.number(),
+    /** 元の Comment。`null` は元の定義に Comment が無かったこと */
+    Comment: z.string().nullable(),
+  }),
+});
+
+/** `DataSync` のうち、ハートビートの書き換えで触る項目。それ以外はそのまま保つ */
+const taskStateSchema = z.looseObject({
+  HeartbeatSeconds: z.number().optional(),
+  Comment: z.string().optional(),
 });
 
 /** Lambda の関数名の <name> 部分 */
@@ -537,6 +568,147 @@ export async function restoreExecutionTimeout(
       definition: JSON.stringify(restored),
     }),
   );
+}
+
+/**
+ * `DataSync` の Comment を、IT が残した元の値として読む。
+ *
+ * @param comment - `DataSync` の Comment
+ * @returns 元の値。IT が書き換えた印が無ければ `undefined`
+ */
+function parseHeartbeatBackup(
+  comment: string | undefined,
+): z.infer<typeof heartbeatBackupSchema>["itHeartbeatBackup"] | undefined {
+  if (comment === undefined) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(comment);
+  } catch {
+    // JSON でない Comment は元の定義のもので、IT の印ではない
+    return undefined;
+  }
+  const result = heartbeatBackupSchema.safeParse(parsed);
+  return result.success ? result.data.itHeartbeatBackup : undefined;
+}
+
+/**
+ * `DataSync` のハートビートがすぐ切れるよう、デプロイ済みのステートマシンの定義を書き換える。
+ * 本番のハートビート（300 秒）を待たずに、結果もハートビートも返さない関数の扱いを確かめるため。
+ * ARN は変わらないため、本番と同じ EventBridge rule を通る。終わったら必ず {@link restoreDataSyncHeartbeat} で戻す。
+ *
+ * @param stateMachineArn - ステートマシンの ARN
+ * @returns 書き換えたら解決する
+ * @throws {Error} `DataSync` が無い・ハートビートを持たない、または既に書き換わっている場合（元の値を上書きして戻せなくなるため）
+ */
+export async function shortenDataSyncHeartbeat(
+  stateMachineArn: string,
+): Promise<void> {
+  const original = await describeDefinition(stateMachineArn);
+  const state = taskStateSchema.parse(original.States[DATA_SYNC_STATE]);
+  if (parseHeartbeatBackup(state.Comment) !== undefined) {
+    throw new Error(
+      `${DATA_SYNC_STATE} が書き換わったままです。restoreDataSyncHeartbeat で戻してから書き換えてください`,
+    );
+  }
+  if (state.HeartbeatSeconds === undefined) {
+    throw new Error(`${DATA_SYNC_STATE} にハートビートが設定されていません`);
+  }
+  const backup: z.infer<typeof heartbeatBackupSchema> = {
+    itHeartbeatBackup: {
+      HeartbeatSeconds: state.HeartbeatSeconds,
+      Comment: state.Comment ?? null,
+    },
+  };
+  const shortened: Definition = {
+    ...original,
+    States: {
+      ...original.States,
+      [DATA_SYNC_STATE]: {
+        ...state,
+        HeartbeatSeconds: SHORTENED_HEARTBEAT_SECONDS,
+        Comment: JSON.stringify(backup),
+      },
+    },
+  };
+  await sfn.send(
+    new UpdateStateMachineCommand({
+      stateMachineArn,
+      definition: JSON.stringify(shortened),
+    }),
+  );
+}
+
+/**
+ * {@link shortenDataSyncHeartbeat} の書き換えを戻す。書き換わっていなければ何もしない。
+ * 元のハートビートと Comment は、書き換えた `DataSync` の Comment から取る。
+ * CDK のテンプレートは変わっていないため、再デプロイでは戻らない（変更なしで終わる）
+ *
+ * @param stateMachineArn - ステートマシンの ARN
+ * @returns 戻したら（書き換わっていなければすぐに）解決する
+ */
+export async function restoreDataSyncHeartbeat(
+  stateMachineArn: string,
+): Promise<void> {
+  const current = await describeDefinition(stateMachineArn);
+  const state = taskStateSchema.parse(current.States[DATA_SYNC_STATE]);
+  const backup = parseHeartbeatBackup(state.Comment);
+  if (backup === undefined) {
+    return;
+  }
+  const { Comment: _marker, ...rest } = state;
+  const restored: Definition = {
+    ...current,
+    States: {
+      ...current.States,
+      [DATA_SYNC_STATE]: {
+        ...rest,
+        HeartbeatSeconds: backup.HeartbeatSeconds,
+        ...(backup.Comment === null ? {} : { Comment: backup.Comment }),
+      },
+    },
+  };
+  await sfn.send(
+    new UpdateStateMachineCommand({
+      stateMachineArn,
+      definition: JSON.stringify(restored),
+    }),
+  );
+}
+
+/** 実行履歴の `TaskTimedOut` イベントのうち、IT が読む項目 */
+export type TaskTimedOutEvent = {
+  /** タイムアウトしたタスクのリソースの種類（例: `lambda`） */
+  resourceType: string | undefined;
+  /** タイムアウトのエラー名。どの名前で出るかを確かめるのが目的のため、値を加工しない */
+  error: string | undefined;
+};
+
+/**
+ * 実行履歴から `TaskTimedOut` イベントを集める（`GetExecutionHistory` の `taskTimedOutEventDetails`）。
+ *
+ * @param executionArn - 実行 ARN
+ * @returns `TaskTimedOut` イベント（0 件なら空配列）
+ */
+export async function findTaskTimedOutEvents(
+  executionArn: string | undefined,
+): Promise<TaskTimedOutEvent[]> {
+  const events = [];
+  let nextToken: string | undefined;
+  do {
+    const page = await sfn.send(
+      new GetExecutionHistoryCommand({ executionArn, nextToken }),
+    );
+    events.push(...(page.events ?? []));
+    nextToken = page.nextToken;
+  } while (nextToken !== undefined);
+  return events
+    .filter((event) => event.type === "TaskTimedOut")
+    .map((event) => ({
+      resourceType: event.taskTimedOutEventDetails?.resourceType,
+      error: event.taskTimedOutEventDetails?.error,
+    }));
 }
 
 /**
