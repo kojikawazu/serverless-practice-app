@@ -70,7 +70,7 @@ AWS Step Functions とは何か、どう動くか、このプロジェクトで�
 
 ハートビートは、待っているタスクに「まだ動いている」と知らせる仕組みで、`.waitForTaskToken` のタスクでは相手が `SendTaskHeartbeat` を送る。**非同期で呼んだ Lambda では、ハートビートは呼んだ直後から数え始める**（同期で呼んだ場合は、関数が終わってから数え始める。公式）。
 
-ハートビートが切れたときのエラー名は、**公式の中で記述が揺れている**。Task ステートのページは `States.Timeout` と書き、エラー処理のページは `States.HeartbeatTimeout` をその用途の名前として定義している。このプロジェクトでは観測していない（#90）。
+ハートビートが切れたときのエラー名は、**公式の中で記述が揺れている**。Task ステートのページは `States.Timeout` と書き、エラー処理のページは `States.HeartbeatTimeout` をその用途の名前として定義している。このプロジェクトでは LocalStack で観測し、**`States.Timeout`** だった。実行の結果・実行履歴の `TaskTimedOut` イベント・状態変化イベントのどれにも同じ名前で出る。実 AWS の値は未観測（09「[LocalStack での検証結果](../09-architecture-specification.md#localstack-での検証結果)」・#90）。
 
 ### Retry と Catch
 
@@ -106,7 +106,7 @@ Standard の実行は、状態が変わるたびに EventBridge の既定のイ�
 
 | 使っているもの | このプロジェクトでの使い方 | 正本 |
 |---|---|---|
-| 種類 | **Standard**。`.waitForTaskToken` と状態変化イベントが Standard でしか使えないため。CDK では種類を指定しておらず、既定に頼っている（明示は #90） | 09「[Step Functions の流れ](../09-architecture-specification.md#step-functions-の流れ)」 |
+| 種類 | **Standard**。`.waitForTaskToken` と状態変化イベントが Standard でしか使えないため。CDK で種類を明示し、UT で固定している（#90） | 09「[Step Functions の流れ](../09-architecture-specification.md#step-functions-の流れ)」 |
 | ステート | `Enqueue` → `DataSync` の 2 つの `Task` だけ。分岐・並列・`Catch` は持たない | 03「[ステートマシン](../03-functional-specification.md#ステートマシンbatch)」 |
 | 統合のパターン | `Enqueue` は Request Response（同期）。`DataSync` は `.waitForTaskToken` + `InvocationType: "Event"`（非同期で呼び、関数がタスクトークンで結果を返す） | 09「[対象の段と呼び出し方](../09-architecture-specification.md#対象の段と呼び出し方)」 |
 | 入出力 | JSONata。実行入力に実行名（とタスクトークン）を足してタスクに渡し、タスクの出力は次へ流さず実行入力をそのまま渡す | 07「[タスク入力](../07-api-specification.md#タスク入力投入データ連携-lambda-共通)」 |
@@ -137,7 +137,7 @@ Standard の実行は、状態が変わるたびに EventBridge の既定のイ�
 
 同期で呼ぶ `Enqueue` は Step Functions の `Retry` がやり直す。非同期で呼ぶ `DataSync` は、Lambda の非同期の再試行を 0 にし、やり直しを Step Functions の `Retry` に任せる（[Lambda 解説](lambda.md#失敗したときに誰がやり直すか)）。関数が `SendTaskFailure` で返したエラー名にも、同じ `Retry` が効く（07「[認証・エラーハンドリング](../07-api-specification.md#認証エラーハンドリング)」）。
 
-`Retry` の対象は公式の推奨とは違う。公式の推奨（と CDK の既定）は `Lambda.ClientExecutionTimeoutException` を含み `Lambda.TooManyRequestsException` を含まないが、このプロジェクトはその逆（04「[リトライ](../04-non-functional-specification.md#リトライ)」）。違いの判断と理由の記録は #90。
+`Retry` の対象は公式の推奨とは違う。公式の推奨（と CDK の既定）は `Lambda.ClientExecutionTimeoutException` を含み `Lambda.TooManyRequestsException` を含まないが、このプロジェクトはその逆。呼び出しが関数に届いたかが分からない失敗はやり直さず（二重に動きうるため）、関数が動く前に断られたスロットリングはやり直す、という考え方による。理由の正本は 04「[リトライ](../04-non-functional-specification.md#リトライ)」で、対象は CDK の UT で固定している（#90）。
 
 ### 実行名と冪等性
 

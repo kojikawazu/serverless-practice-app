@@ -24,7 +24,9 @@ type FunctionName = "enqueue" | "consumer" | "data-sync" | "notify-slack";
 
 /**
  * Step Functions が Retry する一時的なエラー（docs/04「リトライ」）。
- * 注入した失敗（InjectedFailureError）と検証エラー（ValidationError）は、何度やり直しても結果が同じなので含めない
+ * 注入した失敗（InjectedFailureError）と検証エラー（ValidationError）は、何度やり直しても結果が同じなので含めない。
+ * 公式の推奨にある Lambda.ClientExecutionTimeoutException も含めない。呼び出しが関数に届いたかが分からず、
+ * やり直すと処理が二重に走りうるため（理由の正本は docs/04）
  */
 const TRANSIENT_LAMBDA_ERRORS = [
   "Lambda.ServiceException",
@@ -202,6 +204,9 @@ export class BatchStack extends Stack {
 
     const stateMachine = new sfn.StateMachine(this, "BatchStateMachine", {
       stateMachineName: `${this.prefix}-batch`,
+      // 既定（Standard）に頼らず明示する。既定に頼るとテンプレートに値が出ず、UT で固定できない。
+      // DataSync の .waitForTaskToken と失敗通知の状態変化イベントは Standard でしか使えない（docs/09「Step Functions の流れ」）
+      stateMachineType: sfn.StateMachineType.STANDARD,
       queryLanguage: sfn.QueryLanguage.JSONATA,
       definitionBody: sfn.DefinitionBody.fromChainable(
         enqueueTask.next(dataSyncTask),

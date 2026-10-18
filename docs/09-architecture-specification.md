@@ -100,7 +100,9 @@ BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（
 
 `Enqueue（投入）→ DataSync（データ連携）` を順に実行する。Lambda タスクには一時的なエラー（`Lambda.ServiceException` 等）のみ `Retry` を付ける。`DataSync` は非同期で呼び、データ連携 Lambda がタスクトークンで結果を返すまで待つ（「LMI」）。Consumer は SQS イベントソースで起動し、Step Functions の外で動く（元資料の「コレオグラフィ」部分）。
 
-ステートマシンの種類は **Standard**。`DataSync` が使う `.waitForTaskToken` と、失敗の通知に使う EventBridge への状態変化イベントは、どちらも Standard でしか使えないため（[公式](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html)）。今は CDK で種類を指定しておらず、CDK の既定（`STANDARD`）に頼っている（2026-10-17 に、合成したテンプレートに `StateMachineType` が出ないことを確かめた）。明示と UT での固定は #90。
+ステートマシンの種類は **Standard**。`DataSync` が使う `.waitForTaskToken` と、失敗の通知に使う EventBridge への状態変化イベントは、どちらも Standard でしか使えないため（[公式](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html)）。CDK で種類を明示し（`stateMachineType: STANDARD`）、UT で固定している（#90）。以前は既定に頼っており、合成したテンプレートに `StateMachineType` が出なかったため、Express に変わっても検査で落ちなかった。
+
+明示より前にデプロイしたスタックへは、上書きでデプロイできない。CloudFormation は `StateMachineType` の変更を置換（作り直し）として扱い、名前を指定したリソースは置換できないため（[公式](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-stepfunctions-statemachine.html)）。LocalStack では `StateMachineAlreadyExists` で失敗し、ロールバックの後もリソースが残って作り直しまで失敗したため、LocalStack ごと作り直した（2026-10-18）。実 AWS では試していない。残っているスタックがあれば、`scripts/stack.sh <stage> down` で消してから `up` で作る。
 
 ## システム構成図
 
@@ -253,12 +255,13 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 
 ### LocalStack での検証結果
 
-本物と同じように動くかが分からなかった 2 点を、LocalStack 2026.09.1 で確かめた（2026-10-11。#22）。**LocalStack で動いたことは本物で動くことの証明にはならない**ため、どちらも最後に `dev` で確認する（02「受け入れ条件」）。
+本物と同じように動くかが分からなかった 2 点を、LocalStack 2026.09.1 で確かめた（2026-10-11。#22）。3 点目のハートビート切れのエラー名は、#90 で同じ版で確かめた（2026-10-18）。**LocalStack で動いたことは本物で動くことの証明にはならない**ため、どれも最後に `dev` で確認する（02「受け入れ条件」）。
 
 | 点 | 結果 | `local` での扱い |
 |---|---|---|
 | EventBridge Scheduler がターゲットを定時に起動するか | **起動しない。** `at()` / `rate()` / `cron()`（タイムゾーン指定あり）の Schedule を、デプロイ済みと同じターゲット・ロールで作り 3 分以上待ったが、実行は 0 件で、LocalStack のログにも起動を試みた形跡が無かった。公式ドキュメントにも「モックのみで、スケジュールの実行・ターゲットの起動は再現しない」とある。作成・取得などの API は動くため、デプロイは通る | 実行は `scripts/batch.sh local run` で手動で起動する（Scheduler と同じ `StartExecution` を、入力 `{}` で呼ぶ）。定時の起動は `dev` で確かめる |
 | Step Functions の状態変化イベントが EventBridge rule に届くか | **届く。** `FAILED` と `ABORTED` は rule を経て Slack 通知 Lambda まで届き、`SUCCEEDED` は rule の条件で除外される（いずれも IT で確認。08 #21・#22・#25〜#27）。`TIMED_OUT` も届く（定義を一時的に書き換えて 2 秒でタイムアウトさせ、IT で確認。08 #32）。LocalStack の `TIMED_OUT` では、実行の `error` / `cause` とイベントの `error` / `cause` がどちらも `null` だった。実 AWS でも、実行・通知のどちらにも値は無かった（下記「`dev` での検証結果」） | IT で確かめる。イベントの日時の項目が本物と違う形（文字列）で届くため、通知 Lambda は日時の項目を検証しない（07「状態変化イベント」・#30） |
+| `DataSync` のハートビートが切れたときのエラー名（#90） | **`States.Timeout`。** `States.HeartbeatTimeout` ではない。値が出たのは 4 か所で、すべて同じだった: 実行（`DescribeExecution`）の `error`（`cause` は `null`）、実行履歴（`GetExecutionHistory`）の `TaskTimedOut` イベントの `taskTimedOutEventDetails.error`（`resourceType: lambda`・`resource: invoke.waitForTaskToken`）、同じく `ExecutionFailed` イベントの `executionFailedEventDetails.error`、状態変化イベントの `error`（Slack スタブのログ）。公式の記述は揺れており、Task ステートのページは `States.Timeout`、エラー処理のページは `States.HeartbeatTimeout` をこの用途の名前としている。実 AWS の値は未観測 | IT（08 #54）と同じく、定義の `DataSync` の `HeartbeatSeconds` を一時的に 2 にし、`holdSeconds: 10` で実行した（関数は待ちの始めに 1 回だけハートビートを送るため、結果を返す前に切れる）。開始から約 3 秒で `FAILED` になり、タスクのタイムアウト（960 秒）ではない。対照として、書き換えない定義で同じ入力を実行すると 10 秒で `SUCCEEDED` になった。終わったら元の定義に戻し、書き換える前と一致することを確かめた |
 
 ### `dev` での検証結果
 
@@ -377,7 +380,7 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 |---|---|---|
 | 成功 | `SendTaskSuccess`（出力は今の戻り値 `{ exported, s3Key }`） | 次へ進み `SUCCEEDED` |
 | 想定した失敗（`ValidationError` / `InjectedFailureError` ほか） | `SendTaskFailure`。`error` にエラー名、`cause` に今の Lambda と同じ形の JSON（`errorType` / `errorMessage`）を渡す | `FAILED`。`Retry` はエラー名で今と同じく判定する（07「エラー」の契約を保つ） |
-| 結果を返せない（タスクトークンが無い・`SendTask*` が失敗した・関数が途中で落ちた） | エラーログを 1 行出して終える | ハートビートかタスクのタイムアウトで `FAILED`（`States.HeartbeatTimeout` / `States.Timeout`）。待ち続けず、判定不能を成功にも丸めない |
+| 結果を返せない（タスクトークンが無い・`SendTask*` が失敗した・関数が途中で落ちた） | エラーログを 1 行出して終える | ハートビートかタスクのタイムアウトで `FAILED`（どちらも `States.Timeout`。ハートビート切れは LocalStack で観測し、実 AWS は未観測。「LocalStack での検証結果」）。待ち続けず、判定不能を成功にも丸めない |
 
 - Lambda 側の非同期呼び出しの再試行（既定 2 回）は **0 にする**。再試行すると同じタスクトークンで処理が二重に走り、S3・スタブへの書き込みが重なる。再試行は今と同じく Step Functions の `Retry`（呼び出しそのものの一時的なエラーだけ）に任せる
   - 設定は関数の `$LATEST` に付けるだけでよい。非同期の呼び出しの設定は呼び出し側が指定した修飾子で決まり、修飾子なしの呼び出しは、実行が `$LATEST.PUBLISHED` に回っても `$LATEST` の設定を使う（上記「`dev` での検証結果」の「LMI」。#70）

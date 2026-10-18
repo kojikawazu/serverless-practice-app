@@ -92,9 +92,17 @@ CDK のスタックは、Terraform が作ったロール・キューを参照し
 
 ### 既定値に頼ると、テンプレートに値が出ない
 
-指定を省いた設定は、合成したテンプレートに値として現れないことがある。このデモでは、ステートマシンの種類（Standard か Express か）を CDK で指定しておらず、CDK の既定（`STANDARD`）に頼っている。合成したテンプレートにも `StateMachineType` は出ない（09「[Step Functions の流れ](../09-architecture-specification.md#step-functions-の流れ)」）。
+指定を省いた設定は、合成したテンプレートに値として現れないことがある。このデモでは、ステートマシンの種類（Standard か Express か）を CDK で指定せず、CDK の既定（`STANDARD`）に頼っていた。合成したテンプレートにも `StateMachineType` は出なかった。
 
-テンプレートに値が無いので、UT もその値を固定できていない。`.waitForTaskToken` は Standard でしか使えないため、Express に変わると `DataSync` が壊れるのに、検査では落ちない。CDK で明示して UT で固定する対応は [#90](https://github.com/kojikawazu/serverless-practice-app/issues/90) で扱う。
+テンプレートに値が無いので、UT もその値を固定できなかった。`.waitForTaskToken` は Standard でしか使えないため、Express に変わると `DataSync` が壊れるのに、検査では落ちない。[#90](https://github.com/kojikawazu/serverless-practice-app/issues/90) で CDK に明示し、UT で固定した（09「[Step Functions の流れ](../09-architecture-specification.md#step-functions-の流れ)」）。
+
+### 明示しただけで、作り直しになることがある
+
+既定に頼っていた設定を後から明示すると、実際の値が変わらなくても、テンプレートの差分としては「項目が増えた」ことになる。項目によっては、CloudFormation がそれを置換（作り直し）として扱う。`StateMachineType` はその 1 つで、しかも名前を指定したリソースは置換できない（公式「AWS::StepFunctions::StateMachine」）。
+
+このデモはステートマシンの名前を固定しているため、明示より前にデプロイしたスタックへの上書きは失敗する。LocalStack では `StateMachineAlreadyExists` で失敗した（実 AWS では試していない）。スタックを消してから作り直す（09「Step Functions の流れ」）。
+
+置換を伴うかは、デプロイの前に `cdk diff` で分かる。読み取り専用の変更セットを作って差分を出し、置換になる項目に `replace` と `(requires replacement)` の印を付ける（2026-10-18 に `cdklocal diff` で確かめた）。項目ごとの扱いの正本は、公式リファレンスの各項目にある「Update requires」。
 
 ### 検査は、合成したテンプレートに対するユニットテスト
 
@@ -124,7 +132,8 @@ CDK のスタックは、Terraform が作ったロール・キューを参照し
 | `ステージを -c stage=local\|dev で指定してください` と出る | 仕様どおり。既定値に倒すと、違うステージへデプロイしかねないため。`scripts/cdk.sh` を通す |
 | `cdk destroy` のあとも `CDKToolkit` が残る | 仕様どおり（上記）。消すのは CDK のスタックと Terraform の土台だけ |
 | `deploy` が、SSM パラメータが無いことで失敗する（公式の仕組みからの推論。試していない） | 値はデプロイの時点で解決されるため、Terraform を先に適用していないと SSM が無い。順序は `scripts/stack.sh`（Terraform → CDK）に固定している |
-| テンプレートに、あるはずの設定（`StateMachineType` など）が見当たらない | CDK で指定せず、既定に頼っている。既定に頼った値は UT でも固定できないため、意味のある設定は明示して UT で固定する（上記） |
+| テンプレートに、あるはずの設定が見当たらない | CDK で指定せず、既定に頼っている。既定に頼った値は UT でも固定できないため、意味のある設定は明示して UT で固定する（上記） |
+| 設定を明示しただけなのに、`deploy` が「既にある」で失敗する | 明示した項目が置換を伴い、名前を固定したリソースは置換できない（上記の `StateMachineType`）。スタックを消してから作り直す。事前には `cdk diff` の `replace` の印で分かる |
 | LMI の紐付けの条件が 2 か所にある | Terraform（`lmi.tf` の `stage == "dev"`）と CDK（`LMI_STAGES`）の両方で同じ条件にしている。突き合わせる検査は無い（[Terraform 解説](terraform.md#特徴と制約)） |
 | 固定した値を変えたら UT が落ちる | UT は仕様の値を固定している。値を変えるときは仕様（09・04）と一緒に直し、テストも更新する |
 | `synth` が遅い | `NodejsFunction` のバンドルが走るため。テストはステージごとに 1 回だけ合成する |
@@ -136,3 +145,4 @@ CDK のスタックは、Terraform が作ったロール・キューを参照し
 - [AWS CDK Developer Guide: Bootstrapping](https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping.html)（`CDKToolkit` と作業用リソース）
 - [aws-cdk-lib.aws_ssm.StringParameter](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ssm.StringParameter.html)（`valueForStringParameter` はデプロイ時に解決される）
 - [aws-cdk-lib/assertions](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.assertions-readme.html)（テンプレートのユニットテスト）
+- [AWS::StepFunctions::StateMachine](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-stepfunctions-statemachine.html)（`StateMachineType` の更新は置換・名前を指定したリソースは置換できない）

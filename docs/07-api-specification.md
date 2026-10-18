@@ -153,8 +153,7 @@ Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `n
 | `InjectedFailureError` | `failAt` で失敗を注入した | しない | `FAILED` |
 | `EnqueuePartialFailureError` | `SendMessageBatch` の一部が失敗した | する。全件を送り直すが、重複排除 ID が決定的なため送信済みの分は重複しない | 尽きたら `FAILED` |
 | `Lambda.ServiceException` ほか一時的なエラー | Lambda サービス側の一時的な失敗 | する（04「リトライ」） | 尽きたら `FAILED` |
-| `States.Timeout`（`DataSync`） | `DataSync` タスクがタイムアウトを超えた（04「パフォーマンス要件」） | しない | `FAILED` |
-| `States.HeartbeatTimeout` | データ連携 Lambda が結果もハートビートも 300 秒返さなかった（結果を返せずに終えた・落ちた） | しない | `FAILED` |
+| `States.Timeout`（`DataSync`） | `DataSync` タスクがタイムアウトを超えた（04「パフォーマンス要件」）。データ連携 Lambda が結果もハートビートも 300 秒返さなかった（結果を返せずに終えた・落ちた）ときも、この名前になる。`States.HeartbeatTimeout` ではない（LocalStack で観測。実 AWS は未観測。09「LocalStack での検証結果」） | しない | `FAILED` |
 | `States.Timeout`（実行全体） | ステートマシンが 40 分を超えた | — | `TIMED_OUT`。この名前は実行履歴の `ExecutionTimedOut` イベントにだけ出る。実 AWS では実行（`describe-execution`）に `error` / `cause` の項目が無く、通知にも値が届かない（09「`dev` での検証結果」）。LocalStack では実行の `error` が `null` で、この名前は出ない（09「LocalStack での検証結果」） |
 
 Consumer Lambda はエラーを投げず、失敗したメッセージを `batchItemFailures` で返す。Slack 通知 Lambda は対象外のイベントでもエラーを投げない（04「エラーハンドリング・堅牢性」）。
