@@ -47,7 +47,7 @@ Lambda のコード: NodejsFunction が synth の中で esbuild によりバン�
 
 このプロジェクトでは、ほとんどが L2（`nodejs.NodejsFunction`・`sfn.StateMachine`・`events.Rule`・`logs.LogGroup`）で、L1 を使うのは 2 か所だけ（`batch-stack.ts`）。
 
-- 定時の Schedule（`scheduler.CfnSchedule`）: L1 で書き、`RetryPolicy` を指定していない。実際に何回再試行されるかは未確認で、[#92](https://github.com/kojikawazu/serverless-practice-app/issues/92) で `get-schedule` を読んで確かめる
+- 定時の Schedule（`scheduler.CfnSchedule`）: L1 で書く。L1 では CDK の既定が効かないため、`RetryPolicy` を省略するとサービス側の既定になる。その値（185 回・24 時間）を `dev` の記録で確かめ、同じ値を明示した（[#92](https://github.com/kojikawazu/serverless-practice-app/issues/92)。04「リトライ」）
 - LMI の関数の紐付け（`lambda.CfnFunction`）: L2 の `NodejsFunction` が持つ L1 の子（`node.defaultChild`）を取り出し、キャパシティプロバイダの設定を直接書く。キャパシティプロバイダは Terraform が作ったものを読み込んで使う（`ICapacityProvider`）が、読み込んだものには関数を足す `addFunction` が無いため
 
 ### 別のスタック（Terraform）の値を SSM から読む
@@ -103,6 +103,8 @@ CDK のスタックは、Terraform が作ったロール・キューを参照し
 このデモはステートマシンの名前を固定しているため、明示より前にデプロイしたスタックへの上書きは失敗する。LocalStack では `StateMachineAlreadyExists` で失敗した（実 AWS では試していない）。スタックを消してから作り直す（09「Step Functions の流れ」）。
 
 置換を伴うかは、デプロイの前に `cdk diff` で分かる。読み取り専用の変更セットを作って差分を出し、置換になる項目に `replace` と `(requires replacement)` の印を付ける（2026-10-18 に `cdklocal diff` で確かめた）。項目ごとの扱いの正本は、公式リファレンスの各項目にある「Update requires」。
+
+**LocalStack では、変更セットによる差分が変更を見落とすことがある。** #92 で Schedule の `Target` に `RetryPolicy` を足したとき、`cdklocal diff`（既定の変更セットの方法）は「差分なし」と返した。`--method=template`（テンプレート同士の比較）では `[+] Added: .RetryPolicy` と出て、デプロイも更新として通った。`local` では両方の方法で見る。
 
 ### 検査は、合成したテンプレートに対するユニットテスト
 

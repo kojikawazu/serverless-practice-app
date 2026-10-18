@@ -41,12 +41,20 @@
 
 | 対象 | 方式 | 対象のエラー | 回数・間隔 |
 |---|---|---|---|
+| EventBridge Scheduler → ステートマシン | Scheduler の再試行 | `StartExecution` の呼び出しの失敗 | 最大 185 回・24 時間（`RetryPolicy`。サービスの既定と同じ値を CDK で明示）。DLQ は置かない |
 | Step Functions の Lambda タスク | `Retry` | `Lambda.ServiceException` / `Lambda.AWSLambdaException` / `Lambda.SdkClientException` / `Lambda.TooManyRequestsException`。投入タスクのみ `EnqueuePartialFailureError` も対象 | 最大 2 回、初回 2 秒、倍率 2 |
 | Consumer | SQS の再配信 | 失敗したメッセージすべて | 受信 3 回で DLQ（`maxReceiveCount: 3`） |
 | Slack 通知 Lambda | 非同期呼び出しの再試行 | 関数のエラー | Lambda 既定（最大 2 回） |
 | データ連携 Lambda | 非同期呼び出しの再試行 | — | **0 回**。同じタスクトークンで処理が二重に走らないようにする。やり直しは `DataSync` タスクの `Retry`（上の行）に任せる。関数が `SendTaskFailure` で返したエラー名にも同じ `Retry` が効く |
 
 注入エラー（`InjectedFailureError`）と検証エラー（`ValidationError`）は `Retry` の対象にしない。何度やり直しても同じ結果になるため。
+
+**同じ定時の起動から実行が 2 つ始まることは防がない**（#92。2026-10-18 に判断）。起きうる経路と、防がない理由は次のとおり。
+
+- **起きうる経路**: Scheduler の配信は少なくとも 1 回で、呼び出しに失敗すると上の表のとおりやり直す。定時の起動の実行名は、Scheduler が `StartExecution` の `name` で渡している（09「`dev` での検証結果」）。やり直しで同じ名前を使うなら、Standard の冪等性で 2 つ目の実行は始まらない。名前が変わるなら、別の実行がもう 1 つ始まる。実行名が違えば投入 Lambda の重複排除 ID（`<実行名>:<配信対象 ID>`）も違うため、メールが二重に送られる。**やり直しで同じ名前になるかは、公式に記述が無く、観測もしていない**（観測した 2 回はどちらも 1 回目で成功した）
+- **防がない理由**: 実行名を起動ごとに決まった値にする手段が、Scheduler だけでは無い。universal target なら `StartExecution` の `name` を渡せるが、Scheduler が埋められる値のうち、予定の時刻（`<aws.scheduler.scheduled-time>`）は `:` を含んで実行名に使えず、`<aws.scheduler.execution-id>` は試行ごとに変わる（公式「Adding context attributes」）。値を変換するには、Scheduler とステートマシンの間に Lambda などを足す必要があり、元資料の構成から外れる。デモでは足さない
+- **起きたときに分かること**: 同じ日に、定時の起動の実行（実行名が UUID）が 2 つ並ぶ。`list-executions` で見える
+- 再試行の回数・時間（185 回・24 時間）は、`dev` で観測したサービスの既定と同じ値を明示したもので、挙動は変えていない。既定に頼ると、値がテンプレートに出ず UT で固定できないため明示した
 
 **公式の推奨との違い**（#90。2026-10-18 に判断）: Lambda タスクの `Retry` は、公式の[ベストプラクティス](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html)と CDK の既定（`retryOnServiceExceptions`）に合わせず、上の表のままにする。CDK の UT で対象を固定している。
 

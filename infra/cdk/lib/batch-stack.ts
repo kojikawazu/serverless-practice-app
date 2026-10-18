@@ -87,6 +87,15 @@ const LMI_MEMORY_GIB_PER_VCPU = 2;
 const LMI_EXECUTION_ENVIRONMENTS = 1;
 
 /**
+ * Scheduler がステートマシンの呼び出しをやり直す最大回数。サービスの既定（dev で観測した値）と同じ値を明示し、
+ * 既定に頼らずテンプレートと UT で見えるようにする（docs/04「リトライ」）
+ */
+const SCHEDULER_MAX_RETRY_ATTEMPTS = 185;
+
+/** Scheduler がやり直しを続ける最大時間（秒）。上と同じく、サービスの既定（24 時間）を明示する */
+const SCHEDULER_MAX_EVENT_AGE_SECONDS = 86400;
+
+/**
  * タスクの出力を次のステートへ流さず、実行入力をそのまま渡す。
  * DataSync も実行入力の failAt を読めるようにするため（docs/07「データ連携 Lambda の出力」）
  */
@@ -230,6 +239,12 @@ export class BatchStack extends Stack {
         roleArn: this.ssmValue("role/scheduler/arn"),
         // 定時起動では失敗を注入しない
         input: "{}",
+        // 実行名は Scheduler が呼び出しごとに付け、やり直しで同じ名前になるかは分からない。
+        // 二重の実行は防がない（docs/04「リトライ」）
+        retryPolicy: {
+          maximumRetryAttempts: SCHEDULER_MAX_RETRY_ATTEMPTS,
+          maximumEventAgeInSeconds: SCHEDULER_MAX_EVENT_AGE_SECONDS,
+        },
       },
     });
 
