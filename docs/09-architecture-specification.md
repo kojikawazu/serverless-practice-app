@@ -190,7 +190,7 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 5. 実行を起動して結果を見る（`./scripts/batch.sh local run [failAt]` → 表示された実行名で `./scripts/batch.sh local logs <実行名>`）。受け入れ条件をまとめて確かめるなら `npm run test:it`
 6. 消す（`./scripts/stack.sh local down`。CDK → Terraform の順に消す）
 
-コマンドの正本は `scripts/` に置き、README からはスクリプトを呼ぶだけにする。Terraform・CDK を個別に操作するときは `scripts/terraform.sh` / `scripts/cdk.sh` を使う。
+コマンドの正本は `scripts/` に置き、README からはスクリプトを呼ぶだけにする。Terraform・CDK を個別に操作するときは `scripts/terraform.sh` / `scripts/cdk.sh` を使う。CDK のテンプレートを変えたら、`deploy` の前に `scripts/cdk.sh <stage> diff` で差分を見る。名前を固定したリソースは置換できないため、置換を伴う差分は終了コード 3 で分かるようにしている。`local` では変更セットとテンプレートの両方の方法で比べる（LocalStack の変更セットが入れ子の項目の差分を返さないことがあるため。#100）。
 
 ### LocalStack の認証
 

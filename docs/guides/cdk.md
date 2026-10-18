@@ -68,7 +68,7 @@ Consumer のタイムアウトは `Token.asNumber` で数値として渡す。�
 | 権限の扱い | IAM ロールは `fromRoleArn` で `mutable: false` の参照にする。CDK の `grant*` が権限を足そうとしても何も起きず、ポリシーは Terraform だけが持つ | 09「IaC の責務分担」 |
 | 名前の先決め | 関数・ステートマシンは `serverless-practice-app-<stage>-<name>` の名前にする。Terraform の IAM はその名前で権限を付ける | 09「IaC の責務分担」 |
 | ステージ | `-c stage=local` または `-c stage=dev` を必ず渡す。未指定や別の値は、既定値に倒さずエラーにする（`lib/stage.ts` の `parseStage`） | 09「[ステージ](../09-architecture-specification.md#ステージ)」 |
-| 操作の入口 | `scripts/cdk.sh <stage> bootstrap` / `deploy` / `destroy`。土台とあわせた順序は `scripts/stack.sh` が決める | 09「[デプロイ](../09-architecture-specification.md#デプロイ)」 |
+| 操作の入口 | `scripts/cdk.sh <stage> bootstrap` / `deploy` / `destroy` / `diff`。土台とあわせた順序は `scripts/stack.sh` が決める | 09「[デプロイ](../09-architecture-specification.md#デプロイ)」 |
 
 ### 権限を CDK に持たせない理由
 
@@ -102,9 +102,13 @@ CDK のスタックは、Terraform が作ったロール・キューを参照し
 
 このデモはステートマシンの名前を固定しているため、明示より前にデプロイしたスタックへの上書きは失敗する。LocalStack では `StateMachineAlreadyExists` で失敗した（実 AWS では試していない）。スタックを消してから作り直す（09「Step Functions の流れ」）。
 
-置換を伴うかは、デプロイの前に `cdk diff` で分かる。読み取り専用の変更セットを作って差分を出し、置換になる項目に `replace` と `(requires replacement)` の印を付ける（2026-10-18 に `cdklocal diff` で確かめた）。項目ごとの扱いの正本は、公式リファレンスの各項目にある「Update requires」。
+置換を伴うかは、デプロイの前に `cdk diff` で分かる。置換になる項目に `replace` と `(requires replacement)` の印を付ける（2026-10-18 に `cdklocal diff` で確かめた）。項目ごとの扱いの正本は、公式リファレンスの各項目にある「Update requires」。
 
-**LocalStack では、変更セットによる差分が変更を見落とすことがある。** #92 で Schedule の `Target` に `RetryPolicy` を足したとき、`cdklocal diff`（既定の変更セットの方法）は「差分なし」と返した。`--method=template`（テンプレート同士の比較）では `[+] Added: .RetryPolicy` と出て、デプロイも更新として通った。`local` では両方の方法で見る。
+`cdk diff` の比べ方は `--method` で選ぶ。既定の `auto` は、読み取り専用の変更セットを作り、作れなければテンプレート同士の比較（`template`）に切り替える（`cdk diff --help`。CLI 2.1145.0）。どちらで比べたのかを結果だけから読み取りにくいため、このプロジェクトは `change-set` と `template` を明示する。
+
+**LocalStack では、変更セットによる差分が変更を見落とすことがある。** #92 で Schedule の `Target` に `RetryPolicy` を足したとき、`cdklocal diff`（既定の `auto`。このときは変更セットを作った）は「差分なし」と返した。`--method=template` では `[+] Added: .RetryPolicy` と出て、デプロイも更新として通った。外す向き（`[-] Removed: .RetryPolicy`）でも同じだった（#100）。
+
+このため、差分は `scripts/cdk.sh <stage> diff` で見る。`local` では両方の方法で比べ、変更セットだけ 0 件なら見落としを警告する。置換を伴う差分があれば終了コード 3 で終わる（`dev` は実 AWS の変更セットだけで比べる）。
 
 ### 検査は、合成したテンプレートに対するユニットテスト
 
@@ -135,7 +139,7 @@ CDK のスタックは、Terraform が作ったロール・キューを参照し
 | `cdk destroy` のあとも `CDKToolkit` が残る | 仕様どおり（上記）。消すのは CDK のスタックと Terraform の土台だけ |
 | `deploy` が、SSM パラメータが無いことで失敗する（公式の仕組みからの推論。試していない） | 値はデプロイの時点で解決されるため、Terraform を先に適用していないと SSM が無い。順序は `scripts/stack.sh`（Terraform → CDK）に固定している |
 | テンプレートに、あるはずの設定が見当たらない | CDK で指定せず、既定に頼っている。既定に頼った値は UT でも固定できないため、意味のある設定は明示して UT で固定する（上記） |
-| 設定を明示しただけなのに、`deploy` が「既にある」で失敗する | 明示した項目が置換を伴い、名前を固定したリソースは置換できない（上記の `StateMachineType`）。スタックを消してから作り直す。事前には `cdk diff` の `replace` の印で分かる |
+| 設定を明示しただけなのに、`deploy` が「既にある」で失敗する | 明示した項目が置換を伴い、名前を固定したリソースは置換できない（上記の `StateMachineType`）。スタックを消してから作り直す。事前には `scripts/cdk.sh <stage> diff` の終了コード 3 で分かる |
 | LMI の紐付けの条件が 2 か所にある | Terraform（`lmi.tf` の `stage == "dev"`）と CDK（`LMI_STAGES`）の両方で同じ条件にしている。突き合わせる検査は無い（[Terraform 解説](terraform.md#特徴と制約)） |
 | 固定した値を変えたら UT が落ちる | UT は仕様の値を固定している。値を変えるときは仕様（09・04）と一緒に直し、テストも更新する |
 | `synth` が遅い | `NodejsFunction` のバンドルが走るため。テストはステージごとに 1 回だけ合成する |

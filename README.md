@@ -72,7 +72,7 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 ./scripts/terraform.sh local destroy  # 土台を消す（CDK を先に消す）
 ```
 
-土台とアプリをまとめて作る・消すときは `stack.sh` を使います（Terraform → CDK の順に作り、CDK → Terraform の順に消します）。`local` では確認を省き、`dev` では Terraform・CDK の確認を残します。アプリ（CDK）だけを操作するときは `./scripts/cdk.sh <stage> {bootstrap|deploy|destroy}` を使います。
+土台とアプリをまとめて作る・消すときは `stack.sh` を使います（Terraform → CDK の順に作り、CDK → Terraform の順に消します）。`local` では確認を省き、`dev` では Terraform・CDK の確認を残します。アプリ（CDK）だけを操作するときは `./scripts/cdk.sh <stage> {bootstrap|deploy|destroy|diff}` を使います。CDK のコードを変えたら、`deploy` の前に `diff` で差分を見ます（終了コード 3 は、置換を伴うため上書きできない差分。使い方と終了コードはスクリプトの先頭のコメント）。
 
 ```bash
 ./scripts/stack.sh local up    # Terraform → CDK の順に作る

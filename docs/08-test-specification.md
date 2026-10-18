@@ -17,7 +17,7 @@
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3・Step Functions）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（ステートマシンの種類・タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン・`DataSync` の呼び出し方・LMI の紐付け） |
-| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` も、終わらない・失敗する実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる） |
+| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` も、終わらない・失敗する実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる）。`scripts/cdk.sh` の `diff` は、差分の出方（置換の有無・方法による違い・失敗）を思いどおりに作るため、CDK の CLI を呼ぶ `npx` を偽物（`test/scripts/helpers/fake-npx-cdk.ts`）に差し替えて確かめる |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる点（Scheduler の定時起動・状態変化イベントによる通知・LMI での実行）。結果は 09「`dev` での検証結果」 |
@@ -88,6 +88,9 @@
 | 54 | データ連携 Lambda が結果もハートビートも返さない実行が、`DataSync` の `States.Timeout` で `FAILED` になる。実行の `error`・実行履歴の `TaskTimedOut` イベントの `error`・Slack スタブのログの `error` がどれも `States.Timeout`（`States.HeartbeatTimeout` ではない。09「LocalStack での検証結果」） | IT | 異常系 |
 | 55 | CDK: ステートマシンの種類を `STANDARD` と明示する。Lambda タスクが一時的なエラーとして `Retry` するのは 04「リトライ」の 4 つだけで、`Lambda.ClientExecutionTimeoutException` を含めない（公式の推奨との違いを黙って戻させない） | UT | 異常系（設定ずれの検出） |
 | 56 | CDK: Schedule の `RetryPolicy` を、最大 185 回・24 時間（`dev` で観測したサービスの既定と同じ値）と明示する（04「リトライ」） | UT | 異常系（設定ずれの検出） |
+| 57 | CDK のスクリプト（`cdk.sh diff`）: `local` は `cdklocal` で `--method=change-set` と `--method=template` の両方を、`dev` は `cdk` で `--method=change-set` だけを、どちらも `--no-color` を付けて呼ぶ。置換を伴わない差分なら件数を出して 0 で終わる。`diff` 以外のコマンドは、引数をそのまま渡す | UT | 正常系 |
+| 58 | CDK のスクリプト: 置換の印（`(requires replacement)` か、リソースの行の末尾の `replace`）がどちらかの方法の出力にあれば、作り直しを案内して 3 で終わる。`local` で変更セットだけ差分 0 件なら、見落としの可能性を警告する。後ろの引数は両方の呼び出しに渡す。未知のコマンドは 2 で終わる | UT | 準正常系 |
+| 59 | CDK のスクリプト: `cdk diff` が失敗したら（変更セットの失敗ならテンプレートの比較に進まず）1 で終わる。差分のあるスタックの数を出力から読めなければ、終了コード 0 でも 1 で終わる | UT | 異常系 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 
