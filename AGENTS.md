@@ -17,6 +17,7 @@
 - `.claude/rules/static-analysis.md`
 - `.claude/rules/coding-standards.md`
 - `.claude/rules/error-handling.md`
+- `.claude/rules/observation.md`
 - `.claude/rules/security.md`
 - `.claude/rules/dead-code.md`
 - `.claude/rules/duplication.md`
