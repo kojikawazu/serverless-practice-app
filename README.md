@@ -11,7 +11,7 @@
 - **定時起動**: EventBridge Scheduler が毎日 9:00（日本時間）に Step Functions のステートマシンを起動する（投入 → データ連携の順）
 - **メール送信**: 投入 Lambda が MySQL スタブの配信対象を SQS FIFO（+ DLQ）へ積み、Consumer Lambda が 1 件ずつメール送信スタブへ渡す
 - **データ連携**: データ連携 Lambda が MySQL スタブから読んだデータを、S3（実バケット）・BigQuery スタブ・Cuenote FC スタブへ書き出す
-- **失敗通知**: 実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、EventBridge rule が Slack 通知 Lambda を呼ぶ。Consumer 側の失敗（DLQ 行き）は通知されない（元資料のリスクの再現）
+- **失敗通知**: 実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、EventBridge rule が Slack 通知 Lambda を呼ぶ。Scheduler がステートマシンを起動できなかったときも、Scheduler の DLQ のアラームを経て同じ Lambda が通知する。Consumer 側の失敗（DLQ 行き）は通知されない（元資料のリスクの再現）
 - **失敗の注入**: 実行入力の `failAt` で投入・データ連携・Consumer のいずれかを失敗させ、通知に乗る / 乗らないの違いを確かめる
 - **LMI（学習目的）**: `dev` ではデータ連携 Lambda を Lambda Managed Instances で動かし、ステートマシンが非同期の呼び出しとタスクトークンで結果を待つ。実行入力の `holdSeconds` で待ち時間を足し、Lambda の 15 分の上限を越える実行を再現する。存在する間は EC2 の料金がかかるため、`dev` は検証の間だけ作って消す（[09「LMI」](docs/09-architecture-specification.md#lmilambda-managed-instances)）
 

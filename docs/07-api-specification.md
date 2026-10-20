@@ -27,7 +27,8 @@
 | メール送信キュー | Consumer Lambda `consumer` | イベントソースマッピング | SQS イベント |
 | ステートマシン | データ連携 Lambda `data-sync` | 非同期呼び出し（`lambda:invoke.waitForTaskToken` 統合、`InvocationType: "Event"`） | タスク入力 + タスクトークン |
 | データ連携 Lambda | ステートマシン | `SendTaskSuccess` / `SendTaskFailure` / `SendTaskHeartbeat` | データ連携 Lambda の出力・エラー |
-| EventBridge rule | Slack 通知 Lambda `notify-slack` | 非同期呼び出し | 状態変化イベント |
+| Scheduler | Scheduler の DLQ（SQS 標準キュー） | Scheduler が送る（`DeadLetterConfig`） | 起動に失敗した呼び出し（下記「Scheduler の DLQ のメッセージ」） |
+| EventBridge rule | Slack 通知 Lambda `notify-slack` | 非同期呼び出し | 状態変化イベント / アラームの状態変化イベント |
 
 ## リクエスト/レスポンス形式
 
@@ -126,18 +127,50 @@ Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `n
 
 それ以外のフィールドは検証しない。`startDate` / `stopDate` は AWS ではエポックミリ秒、LocalStack では ISO 8601 文字列で届き、通知に使わない項目の形の違いで失敗通知を捨てないため（#30）。対象のステートマシンの絞り込みは rule のイベントパターン（`stateMachineArn`）が担う。
 
+### アラームの状態変化イベント（EventBridge → Slack 通知 Lambda）
+
+Scheduler の DLQ のアラーム（04「リトライ」の「起動の失敗の通知」。#101）が `ALARM` になったときに届く。rule のイベントパターン:
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "alarmName": ["serverless-practice-app-<stage>-scheduler-dlq"],
+    "state": { "value": ["ALARM"] }
+  }
+}
+```
+
+Slack 通知 Lambda が使う `detail` のフィールドは `alarmName` / `state.value`（`ALARM` だけを受理する）/ `state.reason`。それ以外のフィールド（`previousState`・`configuration` など）は検証しない。
+
+**形は公式「Alarm events and EventBridge」の例から作っており、実物は未観測。** LocalStack はアラームの状態変化を EventBridge に出さない（09「LocalStack での検証結果」）。`dev` で観測したら、ここと `functions/src/schemas/alarm-state-change-event.ts` をその形に合わせる（08 #66）。
+
+### Scheduler の DLQ のメッセージ
+
+Scheduler が、起動に失敗した呼び出しを送る。このデモのコードは読まず、人が `receive-message` で原因を確かめるために使う。公式「Configuring a schedule's dead-letter queue」によると、本文は呼び出しの内容で、原因はメッセージの属性に入る。
+
+| 属性 | 内容（公式） |
+|---|---|
+| `ERROR_CODE` / `ERROR_MESSAGE` | ターゲットの API が返したエラー。Scheduler 側の失敗なら `AWS.Scheduler.InternalServerError` |
+| `EXHAUSTED_RETRY_CONDITION` | やり直せるエラーのときだけ付く。`MaximumRetryAttempts` か `MaximumEventAgeInSeconds` |
+| `SCHEDULED_TIME` / `SCHEDULE_ARN` / `TARGET_ARN` / `RETRY_ATTEMPTS` / `EXECUTION_ID` | 予定の時刻・Schedule・ターゲット・やり直した回数・呼び出しの ID |
+
+**属性の実物は未観測**（08 #66）。
+
 ### スタブへの出力（構造化ログ）
 
 スタブは送信の代わりに 1 行の JSON をログへ出す。どのスタブも `stub` フィールドを持つ。
 
 ```json
 { "level": "INFO", "stub": "slack", "function": "notify-slack", "executionName": "manual-20261008-001", "status": "FAILED", "error": "InjectedFailureError", "cause": "..." }
+{ "level": "INFO", "stub": "slack", "function": "notify-slack", "message": "アラームを通知しました（スタブ）", "alarmName": "serverless-practice-app-dev-scheduler-dlq", "reason": "Threshold Crossed: ..." }
 ```
 
 | `stub` | 出力する内容 |
 |---|---|
 | `sendgrid` | 宛先・件名・`recipientId` |
-| `slack` | 実行名・状態・エラー名・原因・実行 ARN |
+| `slack` | 実行の失敗: 実行名・状態・エラー名・原因・実行 ARN。アラーム（#101）: アラーム名・`ALARM` になった理由（`message` で見分ける） |
 | `bigquery` | 書き込み件数・`executionName` |
 | `cuenote-fc` | 登録件数・`executionName` |
 

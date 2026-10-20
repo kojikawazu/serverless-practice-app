@@ -144,6 +144,12 @@ data "aws_iam_policy_document" "scheduler" {
     actions   = ["states:StartExecution"]
     resources = ["arn:aws:states:${var.region}:${local.account_id}:stateMachine:${local.prefix}-batch"]
   }
+
+  # 起動に失敗し続けた呼び出しを DLQ へ送る（docs/04「リトライ」）。送り先はこの DLQ だけに絞る
+  statement {
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.scheduler_dlq.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "scheduler" {

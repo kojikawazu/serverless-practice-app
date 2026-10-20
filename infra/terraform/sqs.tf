@@ -36,3 +36,14 @@ resource "aws_sqs_queue_redrive_allow_policy" "mail_dlq" {
     sourceQueueArns   = [aws_sqs_queue.mail.arn]
   })
 }
+
+# Scheduler の起動の失敗を受ける DLQ（docs/04「リトライ」・#101）。
+# Scheduler は FIFO キューを DLQ に使えないため標準キューにする（公式「Configuring a schedule's dead-letter queue」）。
+# 届いたことの通知は、CDK のアラームが送信数で拾う
+resource "aws_sqs_queue" "scheduler_dlq" {
+  name = "${local.prefix}-scheduler-dlq"
+
+  # メール送信の DLQ と同じく、中身（エラーコード・予定時刻）を後から確認できる長さにする
+  message_retention_seconds = 345600 # 4 日
+  sqs_managed_sse_enabled   = true
+}

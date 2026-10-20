@@ -34,6 +34,28 @@ function event(detail: Record<string, unknown> = {}) {
   };
 }
 
+const ALARM_NAME = "serverless-practice-app-dev-scheduler-dlq";
+const ALARM_REASON =
+  "Threshold Crossed: 1 out of the last 1 datapoints [1.0 (20/10/26 00:00:00)] was greater than or equal to the threshold (1.0) (minimum 1 datapoint for OK -> ALARM transition).";
+
+/**
+ * EventBridge が届けるアラームの状態変化イベントを作る。形は公式の例から作った（未観測。schemas のテストと同じ）。
+ *
+ * @param state - detail.state の上書き
+ * @returns イベント
+ */
+function alarmEvent(state: Record<string, unknown> = {}) {
+  return {
+    version: "0",
+    source: "aws.cloudwatch",
+    "detail-type": "CloudWatch Alarm State Change",
+    detail: {
+      alarmName: ALARM_NAME,
+      state: { value: "ALARM", reason: ALARM_REASON, ...state },
+    },
+  };
+}
+
 /**
  * 通知 Lambda の依存を組み立てる。通知先は本物の Slack スタブで、ログを捕捉して通知を確かめる。
  *
@@ -69,9 +91,40 @@ describe("notifySlack", () => {
         },
       ]);
     });
+
+    it("Scheduler の DLQ のアラームが ALARM になったら、アラーム名と理由を Slack スタブへ出す", async () => {
+      const { deps, slack } = setup();
+
+      await notifySlack(alarmEvent(), deps);
+
+      expect(slack()).toEqual([
+        {
+          level: "INFO",
+          message: "アラームを通知しました（スタブ）",
+          function: "notify-slack",
+          stub: "slack",
+          alarmName: ALARM_NAME,
+          reason: ALARM_REASON,
+        },
+      ]);
+    });
   });
 
   describe("準正常系", () => {
+    it("アラームが OK に戻ったイベントでは通知せず、警告ログを出す", async () => {
+      const { deps, slack, records } = setup();
+
+      await notifySlack(alarmEvent({ value: "OK" }), deps);
+
+      expect(slack()).toEqual([]);
+      expect(records()).toEqual([
+        expect.objectContaining({
+          level: "WARN",
+          message: "通知対象外のイベントのため通知しません",
+        }),
+      ]);
+    });
+
     it.each(["TIMED_OUT", "ABORTED"])(
       "%s で error / cause が null でも通知する",
       async (status) => {
@@ -161,6 +214,7 @@ describe("notifySlack", () => {
       const { logger, records } = captureLogger({ function: "notify-slack" });
       const failingNotifier = {
         notify: () => Promise.reject(new Error("Slack 429")),
+        notifyAlarm: () => Promise.reject(new Error("Slack 429")),
       };
 
       await expect(
@@ -171,6 +225,26 @@ describe("notifySlack", () => {
           level: "ERROR",
           message: "失敗の通知に失敗しました",
           executionName: "run-1",
+          errorMessage: "Slack 429",
+        }),
+      ]);
+    });
+
+    it("アラームの通知先が失敗したら、アラーム名付きのエラーログを出してから投げ直す", async () => {
+      const { logger, records } = captureLogger({ function: "notify-slack" });
+      const failingNotifier = {
+        notify: () => Promise.resolve(),
+        notifyAlarm: () => Promise.reject(new Error("Slack 429")),
+      };
+
+      await expect(
+        notifySlack(alarmEvent(), { notifier: failingNotifier, logger }),
+      ).rejects.toThrow("Slack 429");
+      expect(records()).toEqual([
+        expect.objectContaining({
+          level: "ERROR",
+          message: "アラームの通知に失敗しました",
+          alarmName: ALARM_NAME,
           errorMessage: "Slack 429",
         }),
       ]);

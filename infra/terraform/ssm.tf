@@ -7,6 +7,8 @@ locals {
       "queue/url"                = aws_sqs_queue.mail.url
       "queue/arn"                = aws_sqs_queue.mail.arn
       "dlq/arn"                  = aws_sqs_queue.mail_dlq.arn
+      "scheduler-dlq/arn"        = aws_sqs_queue.scheduler_dlq.arn
+      "scheduler-dlq/name"       = aws_sqs_queue.scheduler_dlq.name
       "bucket/name"              = aws_s3_bucket.exports.bucket
       "schedule-group/name"      = aws_scheduler_schedule_group.batch.name
       "role/state-machine/arn"   = aws_iam_role.state_machine.arn

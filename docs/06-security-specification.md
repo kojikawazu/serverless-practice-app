@@ -35,12 +35,12 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | データ連携 Lambda | Lambda | `s3:PutObject` / `states:SendTaskSuccess` / `states:SendTaskFailure` / `states:SendTaskHeartbeat` | 出力先バケットの `exports/*` / ステートマシン `serverless-practice-app-<stage>-batch`（タスクトークンで結果を返すため） |
 | Slack 通知 Lambda | Lambda | なし（ログ出力のみ） | — |
 | ステートマシン | Step Functions | `lambda:InvokeFunction` | `serverless-practice-app-<stage>-enqueue` / `-data-sync`（`:*` のバージョン・エイリアスを含む） |
-| Scheduler | EventBridge Scheduler | `states:StartExecution` | `serverless-practice-app-<stage>-batch` |
+| Scheduler | EventBridge Scheduler | `states:StartExecution` / `sqs:SendMessage` | `serverless-practice-app-<stage>-batch` / Scheduler の DLQ（起動に失敗した呼び出しを送る。04「リトライ」） |
 | LMI のオペレーター（`dev` だけ） | Lambda | AWS 管理ポリシー `AWSLambdaManagedEC2ResourceOperator` | キャパシティプロバイダが EC2 インスタンスを起動・終了する（公式の手順どおり。09「LMI（Lambda Managed Instances）」） |
 
 - Lambda 4 種は共通で CloudWatch Logs への書き込み（`logs:CreateLogStream` / `logs:PutLogEvents`）を持つ。対象は自分のロググループに限る
 - ロググループは CDK が作るため、`logs:CreateLogGroup` は付けない
-- EventBridge rule から Slack 通知 Lambda への呼び出しは、関数側のリソースベースポリシーで許可する（CDK がターゲット設定時に付ける。ロールの変更ではない）
+- EventBridge rule から Slack 通知 Lambda への呼び出しは、関数側のリソースベースポリシーで許可する（CDK がターゲット設定時に付ける。ロールの変更ではない）。rule は 2 つ（実行の失敗・Scheduler の DLQ のアラーム）で、許可も rule ごとに 1 つずつ付く
 - `*` のアクション・`*` のリソースは使わない。例外は LMI のオペレーターの AWS 管理ポリシーで、Lambda が EC2 を操作するために公式が指定するもの。`dev` で検証する間だけ存在する
 - LMI のインスタンスのセキュリティグループは、受信を許さず、送信は HTTPS（443）だけにする
 - **`local` では権限の過不足を確かめられない**: LocalStack は既定で IAM のポリシーを評価しないため、権限が足りなくても動く。最小権限で動くことは `dev` で確かめる（#23）
