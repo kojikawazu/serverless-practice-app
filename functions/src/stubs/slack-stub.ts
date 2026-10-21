@@ -1,5 +1,6 @@
 import type { Logger } from "../types/logger";
 import type {
+  AlarmNotice,
   ExecutionFailureNotice,
   FailureNotifier,
 } from "../types/notification";
@@ -27,6 +28,21 @@ export class SlackStub implements FailureNotifier {
       status: notice.status,
       error: notice.error,
       cause: notice.cause,
+    });
+    return Promise.resolve();
+  }
+
+  /**
+   * アラームの通知内容を 1 行のログに出す。
+   *
+   * @param notice - 通知の内容
+   * @returns ログを出し終えたら解決する
+   */
+  notifyAlarm(notice: AlarmNotice): Promise<void> {
+    this.logger.info("アラームを通知しました（スタブ）", {
+      stub: "slack",
+      alarmName: notice.alarmName,
+      reason: notice.reason,
     });
     return Promise.resolve();
   }

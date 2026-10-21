@@ -234,9 +234,67 @@ describe("BatchStack（local）", () => {
         Targets: [Match.objectLike({ Arn: Match.anyValue() })],
       });
     });
+
+    it("#101: Schedule は起動に失敗した呼び出しを Terraform の DLQ（SSM の ARN）へ送る", () => {
+      template.hasResourceProperties("AWS::Scheduler::Schedule", {
+        Target: {
+          DeadLetterConfig: {
+            Arn: ssmRef(
+              json,
+              "/serverless-practice-app/local/scheduler-dlq/arn",
+            ),
+          },
+        },
+      });
+    });
+
+    it("#101: DLQ のアラームは、5 分間に 1 件でも届いたら ALARM にし、届かない期間は ALARM にしない", () => {
+      template.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: "serverless-practice-app-local-scheduler-dlq",
+        Namespace: "AWS/SQS",
+        Dimensions: [
+          {
+            Name: "QueueName",
+            Value: ssmRef(
+              json,
+              "/serverless-practice-app/local/scheduler-dlq/name",
+            ),
+          },
+        ],
+        Statistic: "Sum",
+        Period: 300,
+        EvaluationPeriods: 1,
+        Threshold: 1,
+        ComparisonOperator: "GreaterThanOrEqualToThreshold",
+        TreatMissingData: "notBreaching",
+      });
+    });
+
+    it("#101: EventBridge rule は、DLQ のアラームが ALARM になったことを Slack 通知へ流す", () => {
+      template.hasResourceProperties("AWS::Events::Rule", {
+        Name: "serverless-practice-app-local-scheduler-dlq-alarm",
+        EventPattern: {
+          source: ["aws.cloudwatch"],
+          "detail-type": ["CloudWatch Alarm State Change"],
+          detail: {
+            alarmName: [Match.anyValue()],
+            state: { value: ["ALARM"] },
+          },
+        },
+        Targets: [Match.objectLike({ Arn: Match.anyValue() })],
+      });
+    });
   });
 
   describe("異常系（設定ずれの検出）", () => {
+    // メッセージ数（ApproximateNumberOfMessagesVisible）は DLQ を空にするまで減らず、ALARM のままになって次の失敗を通知しない
+    it("#101: DLQ のアラームはメッセージ数ではなく、届いた数（NumberOfMessagesSent）で数える", () => {
+      template.resourceCountIs("AWS::CloudWatch::Alarm", 1);
+      template.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        MetricName: "NumberOfMessagesSent",
+      });
+    });
+
     it("IAM のロール・ポリシーを 1 つも作らない（権限は Terraform が持つ。grant* が足していない）", () => {
       template.resourceCountIs("AWS::IAM::Role", 0);
       template.resourceCountIs("AWS::IAM::Policy", 0);
@@ -355,11 +413,15 @@ describe("BatchStack（local）", () => {
       }
     });
 
-    it("Lambda を外から呼べるのは EventBridge から Slack 通知への 1 つだけ", () => {
-      template.resourceCountIs("AWS::Lambda::Permission", 1);
-      template.hasResourceProperties("AWS::Lambda::Permission", {
-        Principal: "events.amazonaws.com",
-      });
+    it("Lambda を外から呼べるのは、EventBridge の 2 つの rule から Slack 通知への呼び出しだけ", () => {
+      template.resourceCountIs("AWS::Lambda::Permission", 2);
+      const permissions = Object.values(json.Resources).filter(
+        (r) => r.Type === "AWS::Lambda::Permission",
+      );
+      expect(permissions.map((p) => p.Properties.Principal)).toEqual([
+        "events.amazonaws.com",
+        "events.amazonaws.com",
+      ]);
     });
   });
 });
@@ -380,10 +442,10 @@ describe("BatchStack（dev）", () => {
     const defaults = Object.values(devJson.Parameters).flatMap((p) =>
       p.Default === undefined ? [] : [p.Default],
     );
-    // local の 11 個に、LMI のキャパシティプロバイダの ARN を足した 12 個
+    // local の 13 個（Scheduler の DLQ の ARN・名前を含む）に、LMI のキャパシティプロバイダの ARN を足した 14 個
     expect(
       defaults.filter((name) => name.startsWith("/serverless-practice-app/")),
-    ).toHaveLength(12);
+    ).toHaveLength(14);
     expect(defaults.filter((name) => name.includes("/local/"))).toEqual([]);
   });
 

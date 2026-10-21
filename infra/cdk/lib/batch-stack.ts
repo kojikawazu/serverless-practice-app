@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { Duration, RemovalPolicy, Stack, Tags, Token } from "aws-cdk-lib";
 import type { StackProps } from "aws-cdk-lib";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -96,6 +97,13 @@ const SCHEDULER_MAX_RETRY_ATTEMPTS = 185;
 const SCHEDULER_MAX_EVENT_AGE_SECONDS = 86400;
 
 /**
+ * Scheduler の DLQ のアラームが送信数を数える期間（分）。届いた期間だけ ALARM になり、次の期間に送信が無ければ
+ * OK に戻るため、次の失敗でもう一度 ALARM になる（docs/04「リトライ」）。OK に戻ることは LocalStack と実 AWS の dev の
+ * 両方で確かめた（docs/09「`dev` での検証結果」）
+ */
+const SCHEDULER_DLQ_ALARM_PERIOD_MINUTES = 5;
+
+/**
  * タスクの出力を次のステートへ流さず、実行入力をそのまま渡す。
  * DataSync も実行入力の failAt を読めるようにするため（docs/07「データ連携 Lambda の出力」）
  */
@@ -110,7 +118,7 @@ export type BatchStackProps = StackProps & {
 };
 
 /**
- * アプリ側のリソース（Lambda 4 種・ステートマシン・Schedule・EventBridge rule）をまとめたスタック（docs/09「IaC の責務分担」）。
+ * アプリ側のリソース（Lambda 4 種・ステートマシン・Schedule・EventBridge rule・アラーム）をまとめたスタック（docs/09「IaC の責務分担」）。
  *
  * Terraform が作った土台（IAM ロール・SQS・S3・Schedule group）は SSM パラメータから参照し、
  * このスタックでは IAM のロールもポリシーも作らない。ロールは mutable: false で参照するため、
@@ -245,7 +253,32 @@ export class BatchStack extends Stack {
           maximumRetryAttempts: SCHEDULER_MAX_RETRY_ATTEMPTS,
           maximumEventAgeInSeconds: SCHEDULER_MAX_EVENT_AGE_SECONDS,
         },
+        // やり直しを使い切った（またはやり直さない失敗の）呼び出しを送る。実行が始まらない失敗は
+        // 状態変化イベントが出ないため、ここで受けて下のアラームで通知する（#101）
+        deadLetterConfig: { arn: this.ssmValue("scheduler-dlq/arn") },
       },
+    });
+
+    // ---- 起動の失敗の通知（docs/02「F-5」・#101）----
+    // DLQ に届いた数で数える。メッセージ数（ApproximateNumberOfMessagesVisible）で数えると、DLQ を空にするまで
+    // ALARM のままになり、次の日の失敗が通知されない
+    const schedulerDlqAlarm = new cloudwatch.Alarm(this, "SchedulerDlqAlarm", {
+      alarmName: `${this.prefix}-scheduler-dlq`,
+      alarmDescription:
+        "Scheduler がステートマシンを起動できず、呼び出しを DLQ へ送った（docs/04「リトライ」）",
+      metric: new cloudwatch.Metric({
+        namespace: "AWS/SQS",
+        metricName: "NumberOfMessagesSent",
+        dimensionsMap: { QueueName: this.ssmValue("scheduler-dlq/name") },
+        statistic: cloudwatch.Stats.SUM,
+        period: Duration.minutes(SCHEDULER_DLQ_ALARM_PERIOD_MINUTES),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator:
+        cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      // 送信の無い期間はデータが出ない。届いていないのは正常なので、ALARM にしない
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
     // ---- 失敗通知（docs/02「F-5」）----
@@ -260,6 +293,18 @@ export class BatchStack extends Stack {
         },
       },
       // ターゲットの追加で付くのは Lambda 側のリソースベースポリシー（呼び出しの許可）で、IAM ロールは変えない
+      targets: [new eventsTargets.LambdaFunction(notifySlack)],
+    });
+    new events.Rule(this, "SchedulerDlqAlarmRule", {
+      ruleName: `${this.prefix}-scheduler-dlq-alarm`,
+      eventPattern: {
+        source: ["aws.cloudwatch"],
+        detailType: ["CloudWatch Alarm State Change"],
+        detail: {
+          alarmName: [schedulerDlqAlarm.alarmName],
+          state: { value: ["ALARM"] },
+        },
+      },
       targets: [new eventsTargets.LambdaFunction(notifySlack)],
     });
   }

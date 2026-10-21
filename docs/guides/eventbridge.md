@@ -130,12 +130,13 @@ AWS のサービスが出すイベントは、アカウント・リージョン�
 |---|---|---|
 | Schedule | 毎日 9:00（`Asia/Tokyo`）に、templated target でステートマシンの `StartExecution` を呼ぶ。`Input` は `{}`、`FlexibleTimeWindow` は `OFF` | 02「[F-1](../02-requirements-specification.md#f-1-定時起動)」・07「[実行入力](../07-api-specification.md#実行入力startexecution-の-input)」 |
 | Schedule group | Terraform が作り、Schedule 定義（CDK）は SSM から名前で参照する | 09「[IaC の責務分担](../09-architecture-specification.md#iac-の責務分担)」 |
-| Scheduler の実行ロール | Terraform が作る。`states:StartExecution` を、このステートマシン 1 つにだけ許す | 06「[認可](../06-security-specification.md#認可権限制御)」 |
-| ルール | 既定のイベントバスで、このステートマシンの `FAILED` / `TIMED_OUT` / `ABORTED` だけを拾い、Slack 通知 Lambda へ渡す。CDK が通知先と同じスタックに置く | 02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」・07「[状態変化イベント](../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」 |
+| Scheduler の実行ロール | Terraform が作る。`states:StartExecution` を、このステートマシン 1 つにだけ許す。DLQ への `sqs:SendMessage` も、Scheduler の DLQ 1 つにだけ許す | 06「[認可](../06-security-specification.md#認可権限制御)」 |
+| Scheduler の DLQ | Terraform が SQS の標準キューで作り、Schedule の `DeadLetterConfig`（CDK）が SSM から参照する。起動に失敗した呼び出しを受ける（#101） | 04「[リトライ](../04-non-functional-specification.md#リトライ)」・07「[Scheduler の DLQ のメッセージ](../07-api-specification.md#scheduler-の-dlq-のメッセージ)」 |
+| ルール | 既定のイベントバスで 2 つ置く。このステートマシンの `FAILED` / `TIMED_OUT` / `ABORTED` と、Scheduler の DLQ のアラームの `ALARM` への変化だけを拾い、どちらも Slack 通知 Lambda へ渡す。CDK が通知先と同じスタックに置く | 02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」・07「[状態変化イベント](../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」「[アラームの状態変化イベント](../07-api-specification.md#アラームの状態変化イベントeventbridge--slack-通知-lambda)」 |
 | ルールから Lambda への権限 | 関数側のリソースベースポリシー。CDK がターゲットの設定のときに付ける（IAM ロールは変えない） | 06「[認可](../06-security-specification.md#認可権限制御)」 |
 | Slack 通知 Lambda の失敗 | 対象外のイベントはエラーにせず正常に終える。通知そのものの失敗は投げ直し、Lambda の非同期の再試行（2 回）に任せる | 03「[Slack 通知 Lambda](../03-functional-specification.md#slack-通知-lambdanotify-slack)」・04「[リトライ](../04-non-functional-specification.md#リトライ)」 |
 
-Scheduler の再試行は、サービスの既定と同じ値（185 回・24 時間）を CDK で明示している（04「[リトライ](../04-non-functional-specification.md#リトライ)」）。Scheduler の DLQ、ルールのターゲットの再試行・DLQ は、CDK で設定しておらず、既定のまま（上記）。
+Scheduler の再試行は、サービスの既定と同じ値（185 回・24 時間）を CDK で明示している（04「[リトライ](../04-non-functional-specification.md#リトライ)」）。Scheduler の DLQ は #101 で付けた。ルールのターゲットの再試行・DLQ は、CDK で設定しておらず、既定のまま（上記）。
 
 ## 特徴と制約
 
@@ -180,7 +181,9 @@ Slack 通知 Lambda も、届いたイベントを検証し直す（06「[入力
 
 | 止まるところ | 公式の振る舞い | このプロジェクト |
 |---|---|---|
-| Scheduler → ステートマシン（起動そのもの） | 24 時間・185 回で、DLQ が無ければ捨てられる（上記） | DLQ は無い。起動に失敗し続けると、その日の実行が無いまま、何も通知されない（実行が始まらないので状態変化イベントも出ない） |
+| Scheduler → ステートマシン（起動そのもの） | 24 時間・185 回で、DLQ が無ければ捨てられる（上記） | **#101 で手当てした。** DLQ へ送られた呼び出しを、DLQ のアラーム → ルール → Slack 通知 Lambda で通知する（04「[リトライ](../04-non-functional-specification.md#リトライ)」の「起動の失敗の通知」）。`dev` で端から端まで確かめた。実行ロールの権限の誤り（`AccessDeniedException`）とステートマシンの削除（`StateMachineDoesNotExist`）はやり直されず、予定の約 4 分後に通知された。やり直せるエラーでは、通知はやり直しを使い切った後（最大 24 時間後）になる（どのエラーがやり直されるかは一部だけ観測。09「[`dev` での検証結果](../09-architecture-specification.md#dev-での検証結果)」） |
+| Schedule そのもの（無効化・削除） | 呼び出しが起きない | 気づく仕組みが無い。実行が始まらず、DLQ にも届かない（#109） |
+| CloudWatch アラーム → イベントバス | アラームの状態変化イベントの EventBridge への配信は保証される（公式「Alarm events and EventBridge」） | LocalStack は出さない（下記）。アラームのメトリクス（SQS の `NumberOfMessagesSent`）の欠けは未観測 |
 | Step Functions → イベントバス | 状態変化イベントはベストエフォート（[Step Functions 解説](step-functions.md#状態変化イベントだけに通知を頼っている)） | 欠けたときの手当ては無い |
 | ルール → Lambda | 24 時間・185 回で捨てられる | DLQ は無い |
 | Lambda の関数 | 2 回の再試行で捨てられる | 失敗したイベントの送り先・DLQ は無い |
@@ -198,6 +201,7 @@ Scheduler は呼び出し 100 万回あたり $1.00 で、毎月 1,400 万回は
 | Scheduler が定時に起動しない。`at()` / `rate()` / `cron()` のどれも、ターゲットが呼ばれなかった。作成・取得などの API は動くため、デプロイは通る。`local` では `scripts/batch.sh local run` で手動で起動する | 09「[LocalStack での検証結果](../09-architecture-specification.md#localstack-での検証結果)」 |
 | 状態変化イベントはルールに届き、`SUCCEEDED` はイベントパターンで除外される | 09「[LocalStack での検証結果](../09-architecture-specification.md#localstack-での検証結果)」 |
 | 状態変化イベントの日時の項目（`startDate` / `stopDate`）が、実 AWS ではエポックミリ秒、LocalStack では ISO 8601 の文字列で届く。通知 Lambda が日時を数値として検証していて、LocalStack で失敗通知を捨てていた | 07「[状態変化イベント](../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」・教訓ログ「[失敗通知 Lambda が、通知に使わない日時項目の形の違いで失敗通知を捨てていた](../lessons-learned.md#2026-10-09-失敗通知-lambda-が通知に使わない日時項目の形の違いで失敗通知を捨てていた)」 |
+| CloudWatch アラームは評価され、DLQ への送信で `ALARM` になるが、その状態変化を EventBridge に出さない。ルール → Lambda の経路は、同じ形のイベントを `put-events` で入れて確かめる | 09「[LocalStack での検証結果](../09-architecture-specification.md#localstack-での検証結果)」 |
 | LocalStack は既定で IAM のポリシーを評価しないため、Scheduler の実行ロールの権限が足りなくても分からない。最小権限で動くことは `dev` で確かめる | 06「[認可](../06-security-specification.md#認可権限制御)」 |
 
 LocalStack 全体の性質は [LocalStack 解説](localstack.md#本物の-aws-との違い)を参照。

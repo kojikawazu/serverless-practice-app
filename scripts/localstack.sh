@@ -15,7 +15,7 @@
 set -euo pipefail
 
 # このデモが使うサービス（docs/04「対応環境」）。ヘルスチェックの名前で書く
-REQUIRED_SERVICES="lambda sqs s3 stepfunctions scheduler events ssm iam logs"
+REQUIRED_SERVICES="lambda sqs s3 stepfunctions scheduler events ssm iam logs cloudwatch"
 WAIT_SECONDS="${LOCALSTACK_WAIT_SECONDS:-120}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

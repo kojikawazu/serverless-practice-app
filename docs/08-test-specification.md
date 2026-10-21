@@ -91,6 +91,13 @@
 | 57 | CDK のスクリプト（`cdk.sh diff`）: `local` は `cdklocal` で `--method=change-set` と `--method=template` の両方を、`dev` は `cdk` で `--method=change-set` だけを、どちらも `--no-color` を付けて呼ぶ。置換を伴わない差分なら件数を出して 0 で終わる。`diff` 以外のコマンドは、引数をそのまま渡す | UT | 正常系 |
 | 58 | CDK のスクリプト: 置換の印（`(requires replacement)` か、リソースの行の末尾の `replace`）がどちらかの方法の出力にあれば、作り直しを案内して 3 で終わる。`local` で変更セットだけ差分 0 件なら、見落としの可能性を警告する。後ろの引数は両方の呼び出しに渡す。未知のコマンドは 2 で終わる | UT | 準正常系 |
 | 59 | CDK のスクリプト: `cdk diff` が失敗したら（変更セットの失敗ならテンプレートの比較に進まず）1 で終わる。差分のあるスタックの数を出力から読めなければ、終了コード 0 でも 1 で終わる | UT | 異常系 |
+| 60 | CDK: Schedule の `DeadLetterConfig` を Terraform の DLQ（SSM の `scheduler-dlq/arn`）に向ける。DLQ のアラームは、`NumberOfMessagesSent` の 5 分間の合計が 1 以上で `ALARM` にし、データの無い期間は `ALARM` にしない。rule は、このアラームの `ALARM` への変化だけを Slack 通知 Lambda へ流す（#101） | UT | 正常系 |
+| 61 | CDK: DLQ のアラームは、メッセージ数（`ApproximateNumberOfMessagesVisible`）ではなく送信数（`NumberOfMessagesSent`）で数える。メッセージ数で数えると、DLQ を空にするまで `ALARM` のままになり、次の失敗を通知しない（04「リトライ」） | UT | 異常系（設定ずれの検出） |
+| 62 | 通知 Lambda: アラームの状態変化イベント（`ALARM`）で、アラーム名と理由を Slack スタブへ出す。イベントは `dev` で観測した実物を写した（07「アラームの状態変化イベント」） | UT | 正常系 |
+| 63 | 通知 Lambda: アラームの `OK` / `INSUFFICIENT_DATA` への変化と、設定の変化（`CloudWatch Alarm Configuration Change`）は通知せず、警告ログを出して正常に終える | UT | 準正常系 |
+| 64 | 通知 Lambda: アラーム名が空・理由の無いアラームのイベントは受理しない。アラームの通知先が失敗したら、アラーム名付きのエラーログを出してから投げ直す | UT | 異常系 |
+| 65 | `local` で、Scheduler の DLQ へ 1 件送ると `NumberOfMessagesSent` のデータが出て、アラームが約 5 分後に `ALARM` になり、さらに約 11 分後に `OK` に戻る。LocalStack はこの状態変化を EventBridge に出さない。同じ形のイベントを `put-events` で入れると、rule を経て Slack スタブのログが出る（09「LocalStack での検証結果」。#101） | 手動 | 正常系 |
+| 66 | `dev` で、Schedule のターゲットを存在しないステートマシンへ一時的に向けると、呼び出しが DLQ に届き、アラームが `ALARM` になり、Slack スタブのログにアラーム名が出る。DLQ のメッセージの属性（`ERROR_CODE`・`EXHAUSTED_RETRY_CONDITION`）と、届いたイベントの形を記録する（#101。結果は 09「`dev` での検証結果」） | 手動 | 異常系 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 

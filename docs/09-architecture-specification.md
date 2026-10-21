@@ -60,14 +60,16 @@
 |---|---|---|
 | IAM ロール（Lambda 4 種・Step Functions・Scheduler） | Terraform | CDK からは `mutable: false` で参照し、ポリシーを足させない |
 | SQS FIFO + DLQ | Terraform | `maxReceiveCount: 3`。可視性タイムアウトは Consumer のタイムアウトの 6 倍 |
+| Scheduler の DLQ（SQS 標準キュー） | Terraform | 起動に失敗した呼び出しを受ける（04「リトライ」・#101）。Scheduler は FIFO を DLQ に使えない |
 | S3 バケット（データ連携の出力先） | Terraform | 元資料の表に無いが、状態を持つ土台として Terraform に置く |
 | Schedule group | Terraform | |
 | LMI の VPC・キャパシティプロバイダ | Terraform | `dev` だけ作る。関数の紐付けは CDK（「LMI」の「IaC の責務」） |
 | SSM パラメータ | Terraform | 上記の ARN・名前・URL を `/serverless-practice-app/<stage>/...` に書き出す |
 | Lambda 4 種 | CDK | |
 | Step Functions | CDK | |
-| Schedule 定義 | CDK | Terraform の Schedule group を名前で参照 |
-| EventBridge rule（失敗通知） | CDK | 通知先 Lambda と同じスタックに置く |
+| Schedule 定義 | CDK | Terraform の Schedule group を名前で参照。`DeadLetterConfig` は Terraform の Scheduler の DLQ を SSM で参照 |
+| CloudWatch アラーム（Scheduler の DLQ） | CDK | rule のイベントパターンにアラーム名を書くため、rule と同じスタックに置く。数えるキューは SSM のキュー名で参照 |
+| EventBridge rule（失敗通知 2 つ） | CDK | 実行の失敗と、Scheduler の DLQ のアラーム。通知先 Lambda と同じスタックに置く |
 
 **名前の先決め**: IAM ポリシーは Terraform が先に作るため、CDK が後から作るリソースの ARN を知らない。関数名・ステートマシン名を `serverless-practice-app-<stage>-<name>` の命名規約で固定し、Terraform 側はこの接頭辞のワイルドカードで権限を付ける。
 
@@ -115,12 +117,14 @@ flowchart LR
         SYNC[データ連携 Lambda]
         CON[Consumer Lambda]
         RULE[EventBridge rule]
+        ALARM[CloudWatch アラーム]
         NOTIFY[Slack 通知 Lambda]
     end
     subgraph TF["Terraform 管理"]
         GRP[Schedule group]
         Q[[SQS FIFO]]
         DLQ[[DLQ]]
+        SDLQ[[Scheduler の DLQ]]
         S3[(S3)]
         IAM[IAM ロール]
         SSM[SSM パラメータ]
@@ -143,6 +147,7 @@ flowchart LR
     SYNC --> S3
     SYNC --> EXT
     SFN -. FAILED / TIMED_OUT / ABORTED .-> RULE --> NOTIFY --> SLACK
+    SCH -. 起動に失敗 .-> SDLQ -. 送信数 .-> ALARM -. ALARM .-> RULE
     SSM -. ARN・名前 .-> CDK
 ```
 
@@ -194,7 +199,7 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 
 ### LocalStack の認証
 
-2026-03-23 以降の LocalStack は、起動に LocalStack アカウントの認証トークンが要る（コミュニティ版のイメージは廃止された）。本デモは無料の **Hobby プラン**（非商用）を使う。使う 9 サービス（Lambda / SQS / S3 / Step Functions / EventBridge / EventBridge Scheduler / SSM / IAM / CloudWatch Logs）はすべて含まれる。
+2026-03-23 以降の LocalStack は、起動に LocalStack アカウントの認証トークンが要る（コミュニティ版のイメージは廃止された）。本デモは無料の **Hobby プラン**（非商用）を使う。使う 10 サービス（Lambda / SQS / S3 / Step Functions / EventBridge / EventBridge Scheduler / SSM / IAM / CloudWatch Logs / CloudWatch（メトリクス・アラーム。#101 で追加））はすべて含まれる（CloudWatch は 2026-10-20 に health が `available` であることを確かめた）。
 
 - トークンの要らない最後の版（`4.14.0`、2026-02 で更新停止）に固定する案もあったが、保守されない版では本物の AWS との挙動のずれが広がるため採らなかった
 - トークンは秘匿値として扱う（06「データ保護」）
@@ -249,23 +254,25 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 - **NAT Gateway は作らない**: 外部接続はすべてスタブなので、Lambda から外部へ出る経路が要らない。NAT Gateway は時間課金のため、置くとデモを止めている間も費用がかかる。VPC は LMI のキャパシティプロバイダにサブネットが要るため `dev` だけに作り、パブリックサブネットと IGW の経路にする（VPC・サブネット・IGW は無料）
 - **LMI の EC2 は存在する間だけ課金される**: `dev` の検証の間だけ作り、確かめたら消す（「LMI」の「費用と消し忘れへの備え」）
 - 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
+- **CloudWatch アラーム（Scheduler の DLQ。#101）は存在する間、月額で課金される**: 標準の解像度のアラームは、アラームのメトリクス 1 つあたり月 $0.10 で、無料枠は 10 個（料金ページの写しと第三者の解説による。公式の料金ページの該当箇所は読めていない）。このデモは 1 つで、`dev` は検証の間だけ存在する
 - 試し終えたら CDK → Terraform の順に削除する
 - 削除後も残る 2 つ（state バケットと CDK のブートストラップ）は、中身の保管料だけがかかる。どちらも量が小さく、残す理由がある（下記「`dev` での検証結果」の削除後に残るもの）
 - LMI のキャパシティプロバイダのロググループは、#66 までは IaC の管理外で残っていた。#71 で Terraform の管理下に置き、`down` で消えるようにした（下記「`dev` での検証結果」の「LMI」・「LMI」の「IaC の責務」）
 
 ### LocalStack での検証結果
 
-本物と同じように動くかが分からなかった 2 点を、LocalStack 2026.09.1 で確かめた（2026-10-11。#22）。3 点目のハートビート切れのエラー名は、#90 で同じ版で確かめた（2026-10-18）。**LocalStack で動いたことは本物で動くことの証明にはならない**ため、どれも最後に `dev` で確認する（02「受け入れ条件」）。
+本物と同じように動くかが分からなかった 2 点を、LocalStack 2026.09.1 で確かめた（2026-10-11。#22）。3 点目のハートビート切れのエラー名は、#90 で同じ版で確かめた（2026-10-18）。4 点目の Scheduler の DLQ のアラームは、#101 で同じ版で確かめた（2026-10-20）。**LocalStack で動いたことは本物で動くことの証明にはならない**ため、どれも最後に `dev` で確認する（02「受け入れ条件」）。
 
 | 点 | 結果 | `local` での扱い |
 |---|---|---|
 | EventBridge Scheduler がターゲットを定時に起動するか | **起動しない。** `at()` / `rate()` / `cron()`（タイムゾーン指定あり）の Schedule を、デプロイ済みと同じターゲット・ロールで作り 3 分以上待ったが、実行は 0 件で、LocalStack のログにも起動を試みた形跡が無かった。公式ドキュメントにも「モックのみで、スケジュールの実行・ターゲットの起動は再現しない」とある。作成・取得などの API は動くため、デプロイは通る | 実行は `scripts/batch.sh local run` で手動で起動する（Scheduler と同じ `StartExecution` を、入力 `{}` で呼ぶ）。定時の起動は `dev` で確かめる |
 | Step Functions の状態変化イベントが EventBridge rule に届くか | **届く。** `FAILED` と `ABORTED` は rule を経て Slack 通知 Lambda まで届き、`SUCCEEDED` は rule の条件で除外される（いずれも IT で確認。08 #21・#22・#25〜#27）。`TIMED_OUT` も届く（定義を一時的に書き換えて 2 秒でタイムアウトさせ、IT で確認。08 #32）。LocalStack の `TIMED_OUT` では、実行の `error` / `cause` とイベントの `error` / `cause` がどちらも `null` だった。実 AWS でも、実行・通知のどちらにも値は無かった（下記「`dev` での検証結果」） | IT で確かめる。イベントの日時の項目が本物と違う形（文字列）で届くため、通知 Lambda は日時の項目を検証しない（07「状態変化イベント」・#30） |
 | `DataSync` のハートビートが切れたときのエラー名（#90） | **`States.Timeout`。** `States.HeartbeatTimeout` ではない。値が出たのは 4 か所で、すべて同じだった: 実行（`DescribeExecution`）の `error`（`cause` は `null`）、実行履歴（`GetExecutionHistory`）の `TaskTimedOut` イベントの `taskTimedOutEventDetails.error`（`resourceType: lambda`・`resource: invoke.waitForTaskToken`）、同じく `ExecutionFailed` イベントの `executionFailedEventDetails.error`、状態変化イベントの `error`（Slack スタブのログ）。公式の記述は揺れており、Task ステートのページは `States.Timeout`、エラー処理のページは `States.HeartbeatTimeout` をこの用途の名前としている。実 AWS の値は未観測 | IT（08 #54）と同じく、定義の `DataSync` の `HeartbeatSeconds` を一時的に 2 にし、`holdSeconds: 10` で実行した（関数は待ちの始めに 1 回だけハートビートを送るため、結果を返す前に切れる）。開始から約 3 秒で `FAILED` になり、タスクのタイムアウト（960 秒）ではない。対照として、書き換えない定義で同じ入力を実行すると 10 秒で `SUCCEEDED` になった。終わったら元の定義に戻し、書き換える前と一致することを確かめた |
+| Scheduler の DLQ のアラームが、DLQ への送信で `ALARM` になり、EventBridge に状態変化を出すか（#101） | **`ALARM` にはなるが、EventBridge には出ない。** DLQ に `send-message` で 1 件送ると、直後に `get-metric-statistics` で `NumberOfMessagesSent` のデータポイントが 1 つ見え、アラームは送信の約 4 分 44 秒後に `OK` → `ALARM`、さらに約 11 分 22 秒後に `ALARM` → `OK` になった（`describe-alarms` を 15〜20 秒ごとに読んだ時刻。アラームの履歴の時刻は送信より前の時刻を指しており、使っていない）。この間、Slack 通知 Lambda のログストリームは 0 件だった。同じ形のイベント（`source: aws.cloudwatch`・`detail-type: CloudWatch Alarm State Change`・`detail.alarmName`・`detail.state.value: ALARM`・`detail.state.reason`）を `put-events` で入れると、rule を経て Slack スタブのログ（`message: アラームを通知しました（スタブ）`）が出た | 端から端まで（DLQ → アラーム → rule → 通知）は `dev` で確かめた（下記「`dev` での検証結果」。08 #66）。`dev` ではアラームの履歴の時刻が送信の後を指し、`ALARM` から `OK` に戻るまでは 5 分だった（LocalStack の約 11 分 22 秒と違う）。`local` ではアラームの評価と、rule → 通知 Lambda の経路を別々に確かめる（08 #65）。Scheduler が DLQ へ送ることは、LocalStack では Scheduler が起動しないため確かめられない |
 
 ### `dev` での検証結果
 
-LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` で確かめた（2026-10-11 に #23。08 #23。2026-10-13 に #44 で定時の Schedule と `TIMED_OUT` を追加。08 #33・#34）。2026-10-18 に #92 で、これらの起動の記録を CloudTrail のイベント履歴から読み、実行名を付けた側と Scheduler の再試行の設定を追加した（デプロイはしていない）。
+LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` で確かめた（2026-10-11 に #23。08 #23。2026-10-13 に #44 で定時の Schedule と `TIMED_OUT` を追加。08 #33・#34）。2026-10-18 に #92 で、これらの起動の記録を CloudTrail のイベント履歴から読み、実行名を付けた側と Scheduler の再試行の設定を追加した（デプロイはしていない）。2026-10-21 に #101 で、Scheduler の起動の失敗が DLQ を経て通知されることを追加した。
 
 | 点 | 結果 | 確かめ方 |
 |---|---|---|
@@ -275,6 +282,7 @@ LocalStack では確かめられない 2 点（上記）を、実 AWS の `dev` 
 | `TIMED_OUT` の状態変化イベントで通知が出るか・`error` / `cause` の値（#44） | **出る。値は無い。** 実行は 2 秒で `TIMED_OUT` になり、Slack スタブのログに実行 ARN・状態 `TIMED_OUT`・`error: null`・`cause: null` が出た。`describe-execution` の結果には `error` / `cause` の項目そのものが無く、`States.Timeout` は実行履歴の最後のイベント（`ExecutionTimedOut`）の `error` にだけ出た | IT（08 #32）と同じ手順を AWS CLI で行った。定義の先頭に 10 秒の Wait ステートを足して `TimeoutSeconds` を 2 にし、`scripts/batch.sh dev run` で実行し、終わったら元の定義に戻した。戻した定義が書き換える前と一致することも確かめた。通知 Lambda は値が `null` でも項目が無くても `null` を出す（03「Slack 通知 Lambda」）ため、イベントの `error` / `cause` が `null` なのか項目ごと無いのかは区別していない |
 | 定時の起動の実行名を誰が付けるか（#92） | **Scheduler が `StartExecution` の `name` で渡している。** Step Functions が付けたのではない。上の #23・#44 の起動の `StartExecution` イベントは、どちらも呼び出し元が Scheduler の実行ロール（`assumed-role/serverless-practice-app-dev-scheduler`）、`userAgent` が `AmazonEventBridgeScheduler` で始まり、`requestParameters.name` に実行名の UUID（`d56acd67-…`・`426acb98-…`）があった。対照として、同じアカウントの別のステートマシンを `name` なしで呼んだイベントは、`requestParameters` に `name` が無く、実行名は Step Functions が付けた UUID だった。やり直しで同じ名前を使うかは観測していない（2 回とも 1 回目で成功し、やり直しは起きていない）。扱いは 04「リトライ」 | 2026-10-18 に、CloudTrail のイベント履歴（`lookup-events`、`EventName=StartExecution`、2026-10-08〜18）を読んだ。`StartExecution` は管理イベントで、イベント履歴に 90 日残る（公式）。デプロイはしていない |
 | Scheduler の `RetryPolicy` の実際の値（#92） | **最大 185 回・24 時間（86,400 秒）。** CDK（L1 の `CfnSchedule`）は `RetryPolicy` を省略しており、CloudFormation の `CreateSchedule` の `requestParameters.target` にも `retryPolicy` は無かった。#44 で `get-schedule` で読んだ `Target` をそのまま渡した `UpdateSchedule`（2026-10-12T23:00:51Z）の `requestParameters.target.retryPolicy` が `maximumRetryAttempts: 185`・`maximumEventAgeInSeconds: 86400` だったため、これがサービスの既定と判断した。`get-schedule` の応答そのものは CloudTrail に残らない（`responseElements` が `null`）ため、間接の観測。DLQ（`deadLetterConfig`）も無かった。この値を CDK で明示した（04「リトライ」） | 上と同じく、CloudTrail のイベント履歴（`CreateSchedule` / `UpdateSchedule` / `GetSchedule`）を読んだ |
+| Scheduler の起動の失敗が、DLQ → アラーム → rule → Slack 通知まで届くか（#101） | **届く。** 3 回起動させ、3 回とも DLQ → アラーム → rule → Slack スタブのログまで届いた。予定の時刻の約 46 秒後に DLQ へ送られ（`SentTimestamp`）、その約 3 分 12 秒後にアラームが `OK` → `ALARM` になり（アラームの履歴）、Slack スタブのログにアラーム名と理由が出た。`ALARM` から 5 分後に `OK` に戻り、次の失敗でもう一度 `ALARM` になって通知された（送信数で数える設計の要。04「リトライ」）。`OK` に戻るときの理由は「データが無い」ではなく送信数 `0.0` のデータポイントだった。`OK` への変化は rule で除外され、通知されなかった。**やり直し**: 実行ロールの権限の誤り（`AccessDeniedException`）・ステートマシンが存在しない（`StateMachineDoesNotExist`）は、どちらも `MaximumRetryAttempts` を 2 回にしても `RETRY_ATTEMPTS: 0` で、`EXHAUSTED_RETRY_CONDITION` が無く、CloudTrail の `StartExecution` も起動 1 回につき 1 件だった。`MaximumRetryAttempts` を 0 回にすると、やり直さないエラーにも `EXHAUSTED_RETRY_CONDITION: MaximumRetryAttempts` が付いた。メッセージ・イベントの実物は 07「Scheduler の DLQ のメッセージ」「アラームの状態変化イベント」 | 2026-10-21 に `scripts/stack.sh dev up` の後、Schedule を `update-schedule` で一時的に変えた（#44 と同じく、他の項目は `get-schedule` で読んだ値のまま渡し、読み戻して差分が 3 点だけであることを確かめた）。ターゲットを存在しないステートマシン（`…-batch-missing`）へ、式を数分先の `cron` へ、`MaximumRetryAttempts` を 0 回（12:34Z）・2 回（12:55Z）に変えて 1 回ずつ起動させた。3 回目（13:07Z、2 回）は、その ARN への `states:StartExecution` を実行ロールに別名のインラインポリシーで一時的に足し、IAM を通した。DLQ は `receive-message --message-attribute-names All`、アラームは `describe-alarm-history`、試行の回数は CloudTrail の `StartExecution`（`userIdentity` が Scheduler の実行ロール）で読んだ。イベントの実物は、同じアラームの全状態を CloudWatch Logs へ書き出す rule を一時的に作って取り込んだ（`aws.` のソースは `put-events` で送れないため、通知 Lambda のログとは別の経路で残した）。一時的に足したポリシー・rule・ロググループは、削除の前に消した（08 #66） |
 
 あわせて `failAt` なしの実行（`scripts/batch.sh dev run`）が `SUCCEEDED` になり、メール送信スタブ 3 件・S3 の連携ファイル・BigQuery / Cuenote FC スタブのログがそろい、Slack スタブのログが出ないことも確かめた。
 

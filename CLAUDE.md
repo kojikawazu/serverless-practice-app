@@ -23,6 +23,7 @@
 | static-analysis.md | 全体 | 静的解析の運用（markdownlint の設定とコマンドの正本・抑制の作法・`--fix` の扱い） |
 | coding-standards.md | 全体 | コーディング規約（TypeScript strict・npm・ESLint + Prettier） |
 | error-handling.md | 全体 | エラーハンドリング方針（バリデーション・ドメイン制約・例外処理） |
+| observation.md | 全体 | 外部サービスが返す値は観測してから書く（観測と推論の書き分け・未観測の明記・テストの偽物） |
 | security.md | 全体 | セキュリティ設計方針（認証・通信・インジェクション対策・シークレット管理） |
 | dead-code.md | 全体 | デッドコード禁止 |
 | duplication.md | 全体 | 重複と共通化の判断基準・環境初期化手順の一元化 |

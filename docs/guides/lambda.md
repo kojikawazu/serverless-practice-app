@@ -79,7 +79,7 @@ ARN の末尾に付ける `:1`・`:prod`・`:$LATEST` を**修飾子**（API の
 | 投入（`enqueue`） | Step Functions | 同期 | 03「[投入 Lambda](../03-functional-specification.md#投入-lambdaenqueue)」 |
 | データ連携（`data-sync`） | Step Functions | 非同期 + タスクトークン（関数が自分で結果を返す） | 03「[データ連携 Lambda](../03-functional-specification.md#データ連携-lambdadata-sync)」・09「[対象の段と呼び出し方](../09-architecture-specification.md#対象の段と呼び出し方)」 |
 | Consumer（`consumer`） | SQS FIFO | イベントソースマッピング | 03「[Consumer Lambda](../03-functional-specification.md#consumer-lambdaconsumer)」 |
-| Slack 通知（`notify-slack`） | EventBridge rule | 非同期 | 03「[Slack 通知 Lambda](../03-functional-specification.md#slack-通知-lambdanotify-slack)」 |
+| Slack 通知（`notify-slack`） | EventBridge rule（実行の失敗・Scheduler の DLQ のアラーム） | 非同期 | 03「[Slack 通知 Lambda](../03-functional-specification.md#slack-通知-lambdanotify-slack)」 |
 
 ランタイム・アーキテクチャ・メモリなどの共通の設定は、09「[技術スタック](../09-architecture-specification.md#技術スタック)」と 04「[パフォーマンス要件](../04-non-functional-specification.md#パフォーマンス要件)」を参照。関数は CDK で作り、実行ロールは Terraform で作る（09「[IaC の責務分担](../09-architecture-specification.md#iac-の責務分担)」）。
 

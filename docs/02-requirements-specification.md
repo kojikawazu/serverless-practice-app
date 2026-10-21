@@ -48,6 +48,8 @@ EventBridge Scheduler が決まった時刻に Step Functions を起動する。
 Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わったら、EventBridge rule が Slack 通知 Lambda を呼び、Slack スタブへ通知内容を出す。
 
 - Consumer 側の失敗（DLQ 行き）は通知されない。元資料のリスク 1 をそのまま再現するためで、DLQ アラームは将来構成とする（09「将来構成」）
+- Scheduler がステートマシンを起動できなかったときも通知する（#101）。実行が始まらないため状態変化イベントは出ない。Scheduler が呼び出しを DLQ へ送り、DLQ のアラームが `ALARM` になったことを EventBridge rule が拾って、同じ Slack 通知 Lambda を呼ぶ（04「リトライ」）
+- Schedule の無効化・削除は通知されない（呼び出しそのものが起きないため、DLQ にも届かない）。気づく手段は #109 で決める（`docs/guides/eventbridge.md`「通知が届かない経路が残っている」）
 
 ### F-6: 失敗の注入
 
@@ -91,6 +93,7 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 - [x] `failAt` に未定義の値を渡すと、実行が `FAILED` になり、Slack スタブのログが出る → IT（08 #26）
 - [x] 同じ実行の投入 Lambda が Retry で再実行されても、5 分以内ならキューのメッセージは重複しない（UT で確認する） → UT（08 #2・#7）。重複を除くのは SQS FIFO の重複排除で、UT は同じ入力に同じ重複排除 ID を付けることを確かめる
 - [x] `dev` で、Schedule が定時に実行を起動し、`FAILED` の実行で Slack スタブのログが出る → 定時の Schedule（`cron`）が実行を起動することを確認（08 #33）。式の時・分だけを数分先へ一時的に変えて発火させたため、`cron(0 9 * * ? *)` そのものの発火は見ていない。`FAILED` で Slack スタブのログが出ることは、同じグループ・ロール・ターゲットの 1 回限りの Schedule（`at()`）の実行で確認（08 #23）。いずれも 09「`dev` での検証結果」
+- [x] `dev` で、Scheduler がステートマシンを起動できないと、呼び出しが DLQ に届き、DLQ のアラームが `ALARM` になり、Slack スタブのログにアラーム名が出る → 確認済み（2026-10-21。#101。09「`dev` での検証結果」。08 #66）。`local` では、DLQ への送信でアラームが `ALARM` になることと、同じ形のイベントで Slack スタブのログが出ることまでを確かめた（08 #65）。LocalStack はアラームの状態変化を EventBridge に出さないため、つないだ確認は `dev` で行った
 - [x] `holdSeconds` を付けて実行すると、データ連携 Lambda がハートビートを送りながらその秒数だけ待ってから結果を返し、実行が `SUCCEEDED` になる → IT（08 #35。61 秒）
 - [x] `dev` で、データ連携 Lambda が LMI で動き、`holdSeconds: 960` の実行が 15 分を超えて `SUCCEEDED` になる。`failAt: "dataSync"` の実行が `FAILED` になり Slack スタブのログが出る → 手動（08 #36。2026-10-17 に #66。09「`dev` での検証結果」）
 - [x] `dev` で、CDK → Terraform の順に削除すると、LMI のインスタンス・キャパシティプロバイダ・VPC も残らない → 手動（08 #36。2026-10-17 に #66）。キャパシティプロバイダのロググループも残らない（08 #50。2026-10-17 に #71）
