@@ -97,8 +97,9 @@ const SCHEDULER_MAX_RETRY_ATTEMPTS = 185;
 const SCHEDULER_MAX_EVENT_AGE_SECONDS = 86400;
 
 /**
- * Scheduler の DLQ のアラームが送信数を数える期間（分）。届いた期間だけ ALARM になり、次の期間にデータが無くなれば
- * OK に戻るため、次の失敗でもう一度 ALARM になる（docs/04「リトライ」）。OK に戻ることは LocalStack で確かめ、実 AWS は未観測
+ * Scheduler の DLQ のアラームが送信数を数える期間（分）。届いた期間だけ ALARM になり、次の期間に送信が無ければ
+ * OK に戻るため、次の失敗でもう一度 ALARM になる（docs/04「リトライ」）。OK に戻ることは LocalStack と実 AWS の dev の
+ * 両方で確かめた（docs/09「`dev` での検証結果」）
  */
 const SCHEDULER_DLQ_ALARM_PERIOD_MINUTES = 5;
 

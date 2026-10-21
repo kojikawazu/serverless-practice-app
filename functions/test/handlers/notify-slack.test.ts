@@ -36,10 +36,11 @@ function event(detail: Record<string, unknown> = {}) {
 
 const ALARM_NAME = "serverless-practice-app-dev-scheduler-dlq";
 const ALARM_REASON =
-  "Threshold Crossed: 1 out of the last 1 datapoints [1.0 (20/10/26 00:00:00)] was greater than or equal to the threshold (1.0) (minimum 1 datapoint for OK -> ALARM transition).";
+  "Threshold Crossed: 1 datapoint [1.0 (21/10/26 12:30:00)] was greater than or equal to the threshold (1.0).";
 
 /**
- * EventBridge が届けるアラームの状態変化イベントを作る。形は公式の例から作った（未観測。schemas のテストと同じ）。
+ * EventBridge が届けるアラームの状態変化イベントを作る。`dev` で観測した実物（schemas のテストに全体を写した）のうち、
+ * 通知 Lambda が読む項目だけを残した。
  *
  * @param state - detail.state の上書き
  * @returns イベント
