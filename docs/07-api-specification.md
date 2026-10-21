@@ -144,19 +144,62 @@ Scheduler の DLQ のアラーム（04「リトライ」の「起動の失敗の
 
 Slack 通知 Lambda が使う `detail` のフィールドは `alarmName` / `state.value`（`ALARM` だけを受理する）/ `state.reason`。それ以外のフィールド（`previousState`・`configuration` など）は検証しない。
 
-**形は公式「Alarm events and EventBridge」の例から作っており、実物は未観測。** LocalStack はアラームの状態変化を EventBridge に出さない（09「LocalStack での検証結果」）。`dev` で観測したら、ここと `functions/src/schemas/alarm-state-change-event.ts` をその形に合わせる（08 #66）。
+実 AWS の `dev` で届いた `ALARM` への変化（2026-10-21。#101。EventBridge の別の rule から CloudWatch Logs へ書き出して観測。アカウント ID・`reasonData` の中身は省略）:
+
+```json
+{
+  "version": "0",
+  "id": "d0e0a508-8f80-75cf-cd7f-0348a8142bf7",
+  "detail-type": "CloudWatch Alarm State Change",
+  "source": "aws.cloudwatch",
+  "account": "<アカウント ID>",
+  "time": "2026-10-21T12:37:58Z",
+  "region": "ap-northeast-1",
+  "resources": ["arn:aws:cloudwatch:ap-northeast-1:<アカウント ID>:alarm:serverless-practice-app-dev-scheduler-dlq"],
+  "detail": {
+    "alarmName": "serverless-practice-app-dev-scheduler-dlq",
+    "state": {
+      "value": "ALARM",
+      "reason": "Threshold Crossed: 1 datapoint [1.0 (21/10/26 12:30:00)] was greater than or equal to the threshold (1.0).",
+      "reasonData": "<JSON 文字列>",
+      "timestamp": "2026-10-21T12:37:58.559+0000"
+    },
+    "previousState": { "value": "OK", "reason": "Threshold Crossed: no datapoints were received for 1 period and 1 missing datapoint was treated as [NonBreaching].", "reasonData": "<JSON 文字列>", "timestamp": "2026-10-21T12:26:58.557+0000" },
+    "configuration": {
+      "metrics": [{ "id": "<ID>", "metricStat": { "metric": { "namespace": "AWS/SQS", "name": "NumberOfMessagesSent", "dimensions": { "QueueName": "serverless-practice-app-dev-scheduler-dlq" } }, "period": 300, "stat": "Sum" }, "returnData": true }],
+      "description": "Scheduler がステートマシンを起動できず、呼び出しを DLQ へ送った（docs/04「リトライ」）"
+    }
+  }
+}
+```
+
+- 通知に使う 3 つのフィールドは、公式「Alarm events and EventBridge」の例から作ったスキーマのとおりの位置・型で届いた。スキーマは変えていない。テストの偽物は、この実物に合わせた（`functions/test/schemas/alarm-state-change-event.test.ts`）
+- `state.reason` の文は、公式の例（`1 out of the last 1 datapoints ... (minimum 1 datapoint for OK -> ALARM transition).`）と違い、`1 datapoint [...] was greater than or equal to the threshold (1.0).` だった。通知は文をそのまま出すだけで、文面を解釈しない
+- LocalStack はアラームの状態変化を EventBridge に出さない（09「LocalStack での検証結果」）。この形は実 AWS でだけ観測した
 
 ### Scheduler の DLQ のメッセージ
 
-Scheduler が、起動に失敗した呼び出しを送る。このデモのコードは読まず、人が `receive-message` で原因を確かめるために使う。公式「Configuring a schedule's dead-letter queue」によると、本文は呼び出しの内容で、原因はメッセージの属性に入る。
+Scheduler が、起動に失敗した呼び出しを送る。このデモのコードは読まず、人が `receive-message` で原因を確かめるために使う。本文は呼び出しの内容で、原因はメッセージの属性に入る。
 
-| 属性 | 内容（公式） |
-|---|---|
-| `ERROR_CODE` / `ERROR_MESSAGE` | ターゲットの API が返したエラー。Scheduler 側の失敗なら `AWS.Scheduler.InternalServerError` |
-| `EXHAUSTED_RETRY_CONDITION` | やり直せるエラーのときだけ付く。`MaximumRetryAttempts` か `MaximumEventAgeInSeconds` |
-| `SCHEDULED_TIME` / `SCHEDULE_ARN` / `TARGET_ARN` / `RETRY_ATTEMPTS` / `EXECUTION_ID` | 予定の時刻・Schedule・ターゲット・やり直した回数・呼び出しの ID |
+実 AWS の `dev` で、権限の無いステートマシン（存在しない ARN）へ起動させたときに届いたメッセージ（2026-10-21。#101。`receive-message --message-attribute-names All` で観測）。`RetryPolicy` の `MaximumRetryAttempts` を 0 回と 2 回にして 1 回ずつ起動させ、`EXHAUSTED_RETRY_CONDITION` だけが違った。権限を一時的に足して IAM を通した場合（`StateMachineDoesNotExist`）は、表の下に書く:
 
-**属性の実物は未観測**（08 #66）。
+| 属性・本文 | 観測した値 | 公式「Configuring a schedule's dead-letter queue」の記述 |
+|---|---|---|
+| 本文 | `{"Input":"{}","Name":"<実行名の UUID>","StateMachineArn":"<ターゲットの ARN>"}`。`StartExecution` に渡すはずだった引数 | 「呼び出しの詳細と、ターゲットから受け取った応答を含む JSON」 |
+| `ERROR_CODE` | `AccessDeniedException` | ターゲットの API が返したエラー。Scheduler 側の失敗なら `AWS.Scheduler.InternalServerError` |
+| `ERROR_MESSAGE` | `User: arn:aws:sts::<アカウント ID>:assumed-role/serverless-practice-app-dev-scheduler/<セッション> is not authorized to perform: states:StartExecution on resource: <ターゲットの ARN> because no identity-based policy allows the states:StartExecution action` | 同上 |
+| `EXHAUSTED_RETRY_CONDITION` | 0 回: `MaximumRetryAttempts`。2 回: **項目が無い** | やり直せるエラーのときだけ付く。`MaximumRetryAttempts` か `MaximumEventAgeInSeconds` |
+| `RETRY_ATTEMPTS` | 0 回・2 回とも `0` | 例にだけ載り、説明は無い（名前からはやり直した回数と読める） |
+| `SCHEDULED_TIME` | `2026-10-21T12:34:00Z`。Schedule の式の時刻と一致した（送信は 12:34:46Z） | 例にだけ載り、説明は無い |
+| `TARGET_ARN` | ステートマシンの ARN そのもの | 説明は `arn:aws:scheduler:::aws-sdk:<service>:<apiAction>` の形（ユニバーサルターゲットの例）。このデモはテンプレート化されたターゲット（ステートマシンの ARN を直接指す）のため、形が違う |
+| `SCHEDULE_ARN` / `EXECUTION_ID` | Schedule の ARN / 本文の `Name` と同じ UUID | 例にだけ載り、説明は無い |
+| `IS_PAYLOAD_TRUNCATED` | `false` | 例にだけ載り、説明は無い |
+| `CONTAINS_INVALID_PAYLOAD` | `false` | 例にも説明にも無い（観測で初めて分かった。意味は未確認） |
+
+- **存在しないステートマシンへの起動は、存在の確認より先に IAM で拒否された。** Scheduler の実行ロールは `states:StartExecution` をこのデモのステートマシンの ARN だけに許している（06「認可」）
+- **IAM を通すと `StateMachineDoesNotExist` になった。** その ARN への `states:StartExecution` を実行ロールに一時的に足し、`MaximumRetryAttempts` 2 回で起動させると、`ERROR_CODE` が `StateMachineDoesNotExist`、`ERROR_MESSAGE` が `State Machine Does Not Exist: '<ターゲットの ARN>'`、`RETRY_ATTEMPTS` が `0`、`EXHAUSTED_RETRY_CONDITION` が無いメッセージが、予定の約 46 秒後に届いた。やり直されなかった
+- **`AccessDeniedException` はやり直されなかった。** やり直しを 2 回まで許しても `RETRY_ATTEMPTS` は `0` で、予定の時刻の約 46 秒後に DLQ へ送られた（0 回のときと同じ）。CloudTrail の `StartExecution`（`errorCode: AccessDenied`）も 1 回の起動につき 1 件だった（09「`dev` での検証結果」）
+- **`EXHAUSTED_RETRY_CONDITION` の有無で、やり直せるエラーかを見分けられるのは、`MaximumRetryAttempts` が 1 以上のときだけ。** 0 回では、やり直さないエラー（`AccessDeniedException`）にも `MaximumRetryAttempts` が付いた。0 回の観測だけから「付いた → やり直せるエラー」と読むと誤る（1 回目の観測ではそう推論し、2 回目で外れた）
 
 ### スタブへの出力（構造化ログ）
 
