@@ -41,7 +41,7 @@
 
 | 対象 | 方式 | 対象のエラー | 回数・間隔 |
 |---|---|---|---|
-| EventBridge Scheduler → ステートマシン | Scheduler の再試行 | `StartExecution` の呼び出しの失敗 | 最大 185 回・24 時間（`RetryPolicy`。サービスの既定と同じ値を CDK で明示）。DLQ は置かない |
+| EventBridge Scheduler → ステートマシン | Scheduler の再試行 | `StartExecution` の呼び出しの失敗 | 最大 185 回・24 時間（`RetryPolicy`。サービスの既定と同じ値を CDK で明示）。やり直しを使い切った呼び出しは DLQ（SQS 標準キュー）へ送り、アラームで通知する（下記「起動の失敗の通知」） |
 | Step Functions の Lambda タスク | `Retry` | `Lambda.ServiceException` / `Lambda.AWSLambdaException` / `Lambda.SdkClientException` / `Lambda.TooManyRequestsException`。投入タスクのみ `EnqueuePartialFailureError` も対象 | 最大 2 回、初回 2 秒、倍率 2 |
 | Consumer | SQS の再配信 | 失敗したメッセージすべて | 受信 3 回で DLQ（`maxReceiveCount: 3`） |
 | Slack 通知 Lambda | 非同期呼び出しの再試行 | 関数のエラー | Lambda 既定（最大 2 回） |
@@ -55,6 +55,21 @@
 - **防がない理由**: 実行名を起動ごとに決まった値にする手段が、Scheduler だけでは無い。universal target なら `StartExecution` の `name` を渡せるが、Scheduler が埋められる値のうち、予定の時刻（`<aws.scheduler.scheduled-time>`）は `:` を含んで実行名に使えず、`<aws.scheduler.execution-id>` は試行ごとに変わる（公式「Adding context attributes」）。値を変換するには、Scheduler とステートマシンの間に Lambda などを足す必要があり、元資料の構成から外れる。デモでは足さない
 - **起きたときに分かること**: 同じ日に、定時の起動の実行（実行名が UUID）が 2 つ並ぶ。`list-executions` で見える
 - 再試行の回数・時間（185 回・24 時間）は、`dev` で観測したサービスの既定と同じ値を明示したもので、挙動は変えていない。既定に頼ると、値がテンプレートに出ず UT で固定できないため明示した
+
+**起動の失敗の通知**（#101。2026-10-20 に判断）: Scheduler がステートマシンを起動できなかった呼び出しは、DLQ を経て通知に乗せる。実行が始まらないため、状態変化イベントによる通知（F-5）には乗らない。
+
+| 段 | 内容 | 管理 |
+|---|---|---|
+| DLQ | SQS の**標準**キュー（Scheduler は FIFO を DLQ に使えない。公式「Configuring a schedule's dead-letter queue」）。保持 4 日。Scheduler の実行ロールに、この DLQ への `sqs:SendMessage` だけを足す | Terraform |
+| Schedule の `DeadLetterConfig` | 上の DLQ を指す | CDK |
+| アラーム | DLQ の `NumberOfMessagesSent` の 5 分間の合計が 1 以上で `ALARM`。データの無い期間は `ALARM` にしない（`notBreaching`） | CDK |
+| EventBridge rule | このアラームの `ALARM` への変化（`CloudWatch Alarm State Change`）を、Slack 通知 Lambda へ流す | CDK |
+
+- **送信数で数え、メッセージ数では数えない**: DLQ のメッセージ数（`ApproximateNumberOfMessagesVisible`）で数えると、DLQ を空にするまで `ALARM` のままになる。アラームの通知は状態が変わったときだけなので、次の日の失敗が通知されない。送信数なら、届いた期間だけ `ALARM` になり、データが無くなれば `OK` に戻る（`local` で確かめた。09「LocalStack での検証結果」）。元資料の改善提案 1 は「DLQ のメッセージ数」だが、上の理由で送信数にした
+- **通知が届くまでの時間**: 公式によると、Scheduler はやり直せるエラーなら `RetryPolicy`（上の表。最大 24 時間）を使い切ってから DLQ へ送る。DLQ のメッセージの `EXHAUSTED_RETRY_CONDITION` は「やり直せるエラーのときに付く」と書かれており、恒久的なエラーはやり直さずに送られると読めるが、**どのエラーが恒久的かは未観測**（`dev` で観測する。08 #66）
+- **原因は DLQ に残る**: 通知に入るのはアラーム名と `ALARM` になった理由だけ。起動に失敗した理由（エラーコード・予定時刻）は、DLQ のメッセージの属性（`ERROR_CODE` / `ERROR_MESSAGE` / `SCHEDULED_TIME` など。公式）で確かめる。属性の実物は未観測
+- **Schedule の無効化・削除は通知されない**: 呼び出しが起きないため DLQ にも届かない。気づく手段（その日の実行が無いことを検知する等）は #109 で決める
+- **アラームの費用**: 標準の解像度のメトリクスのアラーム 1 つ（09「費用」）
 
 **公式の推奨との違い**（#90。2026-10-18 に判断）: Lambda タスクの `Retry` は、公式の[ベストプラクティス](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html)と CDK の既定（`retryOnServiceExceptions`）に合わせず、上の表のままにする。CDK の UT で対象を固定している。
 
@@ -70,6 +85,7 @@
 |---|---|---|
 | SQS メッセージ | 1 日 | 試した直後に確認できれば足りる |
 | DLQ メッセージ | 4 日（既定） | DLQ の中身を後から見られるよう、本キューより長く取る |
+| Scheduler の DLQ メッセージ | 4 日（既定） | 起動に失敗した理由（エラーコード）を、通知を受けてから確かめられるようにする |
 | S3 の連携ファイル | 7 日（ライフサイクルで削除） | 費用と残骸を抑える |
 | CloudWatch Logs | 7 日 | 同上 |
 

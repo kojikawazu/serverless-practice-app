@@ -57,5 +57,6 @@
 ## 将来課題・ブロッカー
 
 - 元資料「改善提案の候補」（DLQ アラーム・Consumer の冪等化・`waitForTaskToken`）は将来構成（09「将来構成」）
+- Schedule の無効化・削除で実行が始まらないことに気づく手段は未決（#109。#101 の DLQ のアラームは、呼び出しが起きない失敗を拾わない）
 - `aws-cdk-lib` 2.272.0 が同梱する `brace-expansion`（5.0.9）に高（high）の脆弱性（DoS）がある。開発時だけ使い、入力は自分のコードのグロブに限られるため実害は小さい。同梱のため外から更新できない。2.273.0 は修正版（5.0.12）を同梱しているため、Dependabot の `aws-cdk` グループの PR で取り込んで解消する
 - Dependabot の対象外（Terraform provider・LocalStack のイメージ・`run:` 内のバージョン）は手で更新する（`.github/dependabot.yml` の冒頭）

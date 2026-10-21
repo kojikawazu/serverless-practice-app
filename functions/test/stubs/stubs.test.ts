@@ -108,6 +108,26 @@ describe("SlackStub", () => {
         },
       ]);
     });
+
+    it("アラームの通知内容（アラーム名・理由）を、実行の失敗とは別の message で stub=slack のログ 1 行に出す", async () => {
+      const { logger, records } = captureLogger({ function: "notify-slack" });
+
+      await new SlackStub(logger).notifyAlarm({
+        alarmName: "serverless-practice-app-dev-scheduler-dlq",
+        reason: "Threshold Crossed",
+      });
+
+      expect(records()).toEqual([
+        {
+          level: "INFO",
+          message: "アラームを通知しました（スタブ）",
+          function: "notify-slack",
+          stub: "slack",
+          alarmName: "serverless-practice-app-dev-scheduler-dlq",
+          reason: "Threshold Crossed",
+        },
+      ]);
+    });
   });
 
   describe("準正常系", () => {

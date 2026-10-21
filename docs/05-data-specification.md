@@ -117,6 +117,8 @@ Terraform が書き、CDK が合成時に読む。名前は `/serverless-practic
 | `queue/url` | メール送信キューの URL | 投入 Lambda の環境変数 `QUEUE_URL` |
 | `queue/arn` | メール送信キューの ARN | Consumer のイベントソース |
 | `dlq/arn` | DLQ の ARN | 参照のみ（確認用） |
+| `scheduler-dlq/arn` | Scheduler の DLQ の ARN | Schedule 定義の `DeadLetterConfig` |
+| `scheduler-dlq/name` | Scheduler の DLQ のキュー名 | DLQ のアラーム（メトリクスのディメンション `QueueName`） |
 | `bucket/name` | 連携ファイルの出力先バケット名 | データ連携 Lambda の環境変数 `BUCKET_NAME` |
 | `schedule-group/name` | Schedule group 名 | Schedule 定義 |
 | `role/enqueue/arn` | 投入 Lambda の実行ロール ARN | 投入 Lambda |
