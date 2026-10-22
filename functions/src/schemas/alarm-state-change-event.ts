@@ -2,7 +2,8 @@ import { z } from "zod";
 
 /**
  * CloudWatch アラームの状態変化イベント（EventBridge → Slack 通知 Lambda。docs/07「アラームの状態変化イベント」）。
- * Scheduler の DLQ に起動の失敗が届いたことを知らせるアラーム（#101）が、ALARM になったときに届く。
+ * Scheduler の DLQ に起動の失敗が届いたことを知らせるアラーム（#101）と、Scheduler がその日の起動を試みなかったことを
+ * 知らせるアラーム（#109）が、ALARM になったときに届く。
  *
  * 形は公式「Alarm events and EventBridge」の例から作り、`dev` で観測した実物（2026-10-21。#101）と、使う項目の位置・型が
  * 一致することを確かめた（docs/07「アラームの状態変化イベント」）。

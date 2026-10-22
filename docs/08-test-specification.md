@@ -98,6 +98,10 @@
 | 64 | 通知 Lambda: アラーム名が空・理由の無いアラームのイベントは受理しない。アラームの通知先が失敗したら、アラーム名付きのエラーログを出してから投げ直す | UT | 異常系 |
 | 65 | `local` で、Scheduler の DLQ へ 1 件送ると `NumberOfMessagesSent` のデータが出て、アラームが約 5 分後に `ALARM` になり、さらに約 11 分後に `OK` に戻る。LocalStack はこの状態変化を EventBridge に出さない。同じ形のイベントを `put-events` で入れると、rule を経て Slack スタブのログが出る（09「LocalStack での検証結果」。#101） | 手動 | 正常系 |
 | 66 | `dev` で、Schedule のターゲットを存在しないステートマシンへ一時的に向けると、呼び出しが DLQ に届き、アラームが `ALARM` になり、Slack スタブのログにアラーム名が出る。DLQ のメッセージの属性（`ERROR_CODE`・`EXHAUSTED_RETRY_CONDITION`）と、届いたイベントの形を記録する（#101。結果は 09「`dev` での検証結果」） | 手動 | 異常系 |
+| 67 | CDK: 実行が始まらない日のアラームは、`AWS/Scheduler` の `InvocationAttemptCount`（ディメンションは SSM の Schedule group 名）の 1 日の合計が 1 未満で `ALARM` にし、データの無い日も `ALARM` にする。壁時計の窓（`Asia/Tokyo`）で数え、作ってから 2,880 分は評価しない。rule は、このアラームの `ALARM` への変化だけを Slack 通知 Lambda へ流す（#109） | UT | 正常系 |
+| 68 | CDK: 実行が始まらない日のアラームの前提が崩れていない。`AWS/States` で数えない（手動の実行が欠けを隠す）、Schedule は 1 本だけ（group 単位でしか数えられない）、1 日の区切りは Schedule と同じタイムゾーン、2 つのアラームの rule が自分のアラームだけを指す（04「リトライ」） | UT | 異常系（設定ずれの検出） |
+| 69 | `local` で、実行が始まらない日のアラームの `ALARM` への変化を `put-events` で入れると、rule を経て Slack スタブのログにアラーム名が出る。同じアラームの `OK` と、関係の無いアラーム名の `ALARM` は出ない（評価は確かめられない。09「LocalStack での検証結果」。#109） | 手動 | 正常系 |
+| 70 | `dev` で、Scheduler が起動を試みなかった日の後にアラームが `ALARM` になり、Slack スタブのログにアラーム名が出る。起動を試みた日の後は `OK` になる。`InvocationAttemptCount` のディメンション・値、壁時計の窓の区切り、ウォームアップ中の状態、届いたイベントの形を記録する（#109。結果は 09「`dev` での検証結果」） | 手動 | 異常系 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 

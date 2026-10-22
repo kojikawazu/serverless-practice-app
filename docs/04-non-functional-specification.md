@@ -68,8 +68,26 @@
 - **送信数で数え、メッセージ数では数えない**: DLQ のメッセージ数（`ApproximateNumberOfMessagesVisible`）で数えると、DLQ を空にするまで `ALARM` のままになる。アラームの通知は状態が変わったときだけなので、次の日の失敗が通知されない。送信数なら、届いた期間だけ `ALARM` になり、データが無くなれば `OK` に戻る（`local` で確かめた。09「LocalStack での検証結果」）。元資料の改善提案 1 は「DLQ のメッセージ数」だが、上の理由で送信数にした
 - **通知が届くまでの時間**: 公式によると、Scheduler はやり直せるエラーなら `RetryPolicy`（上の表。最大 24 時間）を使い切ってから DLQ へ送る。**実行ロールの権限の誤り（`AccessDeniedException`）と、ステートマシンが存在しないこと（`StateMachineDoesNotExist`。削除・名前の変更）は、どちらもやり直されず、予定の時刻の約 46 秒後に DLQ へ届き、さらに約 3 分 12 秒後にアラームが `ALARM` になって通知された**（実 AWS の `dev`、2026-10-21、#101。09「`dev` での検証結果」）。スロットリング・Step Functions 側の障害がやり直されるかは未観測で、やり直されるなら通知は最大 24 時間後になる
 - **原因は DLQ に残る**: 通知に入るのはアラーム名と `ALARM` になった理由だけ。起動に失敗した理由は、DLQ のメッセージの属性で確かめる。`ERROR_MESSAGE` に拒否したロール・アクション・ターゲットの ARN が、`SCHEDULED_TIME` にどの日の起動かが入る（実物は 07「Scheduler の DLQ のメッセージ」）
-- **Schedule の無効化・削除は通知されない**: 呼び出しが起きないため DLQ にも届かない。気づく手段（その日の実行が無いことを検知する等）は #109 で決める
+- **Schedule の無効化・削除は DLQ に届かない**: 呼び出しが起きないため。下記「実行が始まらない日の通知」で拾う
 - **アラームの費用**: 標準の解像度のメトリクスのアラーム 1 つ（09「費用」）
+
+**実行が始まらない日の通知**（#109。2026-10-22 に判断）: Schedule が無効化・削除された、式が変えられた、Scheduler が呼び出しを試みなかった日は、実行も DLQ への送信も起きず、状態変化イベントの通知（F-5）にも、上の DLQ の通知にも乗らない。「その日に Scheduler が起動を試みた回数が 0」をアラームで検知し、DLQ のアラームと同じ形（EventBridge rule → Slack 通知 Lambda）で通知する。
+
+| 項目 | 値 | 理由 |
+|---|---|---|
+| メトリクス | `AWS/Scheduler` の `InvocationAttemptCount`（ディメンション `ScheduleGroup`）の合計 | Scheduler の起動の試み（やり直しを含む）だけを数え、手動の実行（`batch.sh run`）を数えない。`AWS/States` の `ExecutionsStarted` は、手動の実行があった日に定時の起動の欠けを隠す |
+| 期間・窓 | 1 日。壁時計の窓（`WallClockWindow`、`Asia/Tokyo`）で、日本時間の 0 時から 24 時までを 1 日として評価する | Schedule は毎日 9:00（日本時間）。24 時間のスライドの窓では、起動やメトリクスの届く時刻が前日より少し遅れただけで、窓に 1 件も入らない時間ができて誤通知になる（公式「Alarm evaluation windows」が日次のバックアップの例で挙げている） |
+| 条件 | 合計が 1 未満で `ALARM`。データの無い日も `ALARM`（`breaching`） | 起動を試みなかった日は、メトリクスのデータ自体が出ない |
+| ウォームアップ | 2,880 分（上限の 2 日）。期間が過ぎるまで評価しない（`OnlyStartEvaluatingAfterWarmUpPeriodEnds: true`） | 壁時計の窓は、最後に終わった 1 日を評価する。作った直後に評価する 1 日は作る前の日で、データが無いため、ウォームアップが無いと作った時点で `ALARM` になる。2 日待てば、評価する 1 日は必ず作った後に始まった日になる。ウォームアップが効くのはアラームを作ったときだけで、更新では始まらない（公式「Alarm warm-up periods」） |
+| EventBridge rule | このアラームの `ALARM` への変化を Slack 通知 Lambda へ流す。DLQ のアラームの rule とは別に作る | 通知 Lambda はアラーム名で分岐しないため、Lambda の変更は要らない。DLQ の rule のパターンに足すと、rule 名（`…-scheduler-dlq-alarm`）が中身と合わなくなる |
+
+- **気づくまでの時間**: 9:00 の起動が無かったことは、その日の 24:00（日本時間）を過ぎた評価で分かる。最大で約 15 時間遅れる。早く気づくより、誤通知を出さないことを選んだ（スライドの窓との比較は上の表）
+- **続けて起動しなかった日は通知されない**: アラームの通知は状態が変わったときだけで、2 日目も `ALARM` のままのため、通知は最初の 1 日だけになる。起動を試みた日が終わると `OK` に戻り、次の欠けでもう一度通知される。DLQ のアラーム（送信数で数え、届いた期間だけ `ALARM`）と違い、欠けが続く間 `ALARM` のままであることは「まだ直っていない」状態を表すため、このままにする
+- **前提: Schedule group に Schedule が 1 本だけ**: ディメンションは `ScheduleGroup` だけで、Schedule 単位のメトリクスは無い（公式「Monitoring Amazon EventBridge Scheduler with Amazon CloudWatch」）。group に 2 本目を足すと、片方が止まっても合計が 1 以上になり気づけない。スタックの Schedule が 1 本であることを CDK の UT で固定する
+- **誤通知が出うる**: メトリクスはベストエフォートで、欠けうる（同じ公式ページ）。欠けた日は、起動していても `ALARM` になる。通知を受けたら `list-executions` で、その日の定時の起動の実行（実行名が UUID）があるかを確かめる。見逃すより誤通知の側に倒す（`error-handling.md`「判定不能を正常値に丸めない」）
+- **`local` では評価を確かめられない**: LocalStack は、CLI で直接作ればウォームアップと壁時計の窓を受け付けるが評価に反映しないように見え、CloudFormation で作ると 2 つの設定そのものを落とす。Scheduler が起動しないため `InvocationAttemptCount` も出ない（09「LocalStack での検証結果」）。`local` では rule → 通知 Lambda の経路だけを確かめ、評価は `dev` で確かめる
+- **未観測**: 次はどれも公式の記述によるもので、`dev` で観測する。`dev` の定時の起動で `InvocationAttemptCount` がディメンション `ScheduleGroup` で出ること、壁時計の窓が日本時間の 0 時で区切ること、ウォームアップの間 `INSUFFICIENT_DATA` のままであること
+- **アラームの費用**: 標準の解像度のメトリクスのアラームが 1 つ増え、計 2 つ（09「費用」）
 
 **公式の推奨との違い**（#90。2026-10-18 に判断）: Lambda タスクの `Retry` は、公式の[ベストプラクティス](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html)と CDK の既定（`retryOnServiceExceptions`）に合わせず、上の表のままにする。CDK の UT で対象を固定している。
 

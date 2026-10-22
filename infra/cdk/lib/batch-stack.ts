@@ -104,6 +104,18 @@ const SCHEDULER_MAX_EVENT_AGE_SECONDS = 86400;
 const SCHEDULER_DLQ_ALARM_PERIOD_MINUTES = 5;
 
 /**
+ * 定時起動のタイムゾーン。実行が始まらない日のアラームも、この日付の区切り（0 時）で 1 日を数える。
+ * 両者がずれると、9:00 の起動が評価の 1 日をまたいで数えられ、起動した日にも ALARM になる（docs/04「リトライ」）
+ */
+const SCHEDULE_TIMEZONE = "Asia/Tokyo";
+
+/**
+ * 実行が始まらない日のアラームのウォームアップ（分）。上限の 2 日。作った直後に評価する 1 日は作る前の日で
+ * データが無いため、2 日待って、作った後に始まった 1 日から評価する（docs/04「リトライ」）
+ */
+const SCHEDULER_MISSED_RUN_WARM_UP_MINUTES = 2880;
+
+/**
  * タスクの出力を次のステートへ流さず、実行入力をそのまま渡す。
  * DataSync も実行入力の failAt を読めるようにするため（docs/07「データ連携 Lambda の出力」）
  */
@@ -239,7 +251,7 @@ export class BatchStack extends Stack {
       groupName: this.ssmValue("schedule-group/name"),
       // 毎日 9:00（日本時間）に起動する
       scheduleExpression: "cron(0 9 * * ? *)",
-      scheduleExpressionTimezone: "Asia/Tokyo",
+      scheduleExpressionTimezone: SCHEDULE_TIMEZONE,
       flexibleTimeWindow: { mode: "OFF" },
       state: "ENABLED",
       target: {
@@ -281,6 +293,42 @@ export class BatchStack extends Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
+    // ---- 実行が始まらない日の通知（docs/04「リトライ」・#109）----
+    // Schedule の無効化・削除では呼び出しが起きず、実行も DLQ への送信も無いため、上の 2 つの通知に乗らない。
+    // Scheduler が起動を試みた回数を 1 日ごとに数え、0 回の日を ALARM にする。
+    // 壁時計の窓とウォームアップは L2 の Alarm に項目が無いため、L1 で作る
+    const missedRunAlarm = new cloudwatch.CfnAlarm(
+      this,
+      "SchedulerMissedRunAlarm",
+      {
+        alarmName: `${this.prefix}-scheduler-missed-run`,
+        alarmDescription:
+          "Scheduler がその日（日本時間）の定時の起動を 1 回も試みなかった（docs/04「リトライ」）",
+        // 手動の実行は数えない。ディメンションは ScheduleGroup だけで、group に Schedule が 1 本だけであることが前提
+        namespace: "AWS/Scheduler",
+        metricName: "InvocationAttemptCount",
+        dimensions: [
+          {
+            name: "ScheduleGroup",
+            value: this.ssmValue("schedule-group/name"),
+          },
+        ],
+        statistic: cloudwatch.Stats.SUM,
+        period: Duration.days(1).toSeconds(),
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        // 起動を試みなかった日はデータ自体が出ない。それを拾うためのアラームなので ALARM にする
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+        // 0 時から 24 時の 1 日で区切る。24 時間のスライドの窓は、起動が前日より少し遅れただけで誤通知になる
+        evaluationWindow: { wallClockWindow: { timezone: SCHEDULE_TIMEZONE } },
+        warmUpConfiguration: {
+          warmUpPeriodDurationInMinutes: SCHEDULER_MISSED_RUN_WARM_UP_MINUTES,
+          onlyStartEvaluatingAfterWarmUpPeriodEnds: true,
+        },
+      },
+    );
+
     // ---- 失敗通知（docs/02「F-5」）----
     new events.Rule(this, "BatchFailureRule", {
       ruleName: `${this.prefix}-batch-failed`,
@@ -302,6 +350,20 @@ export class BatchStack extends Stack {
         detailType: ["CloudWatch Alarm State Change"],
         detail: {
           alarmName: [schedulerDlqAlarm.alarmName],
+          state: { value: ["ALARM"] },
+        },
+      },
+      targets: [new eventsTargets.LambdaFunction(notifySlack)],
+    });
+    // DLQ の rule のパターンに足さず、別の rule にする（rule 名が中身と合わなくなるため。docs/04「リトライ」）
+    new events.Rule(this, "SchedulerMissedRunAlarmRule", {
+      ruleName: `${this.prefix}-scheduler-missed-run-alarm`,
+      eventPattern: {
+        source: ["aws.cloudwatch"],
+        detailType: ["CloudWatch Alarm State Change"],
+        detail: {
+          // CfnAlarm の Ref はアラーム名
+          alarmName: [missedRunAlarm.ref],
           state: { value: ["ALARM"] },
         },
       },

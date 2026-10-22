@@ -57,5 +57,5 @@
 ## 将来課題・ブロッカー
 
 - 元資料「改善提案の候補」（DLQ アラーム・Consumer の冪等化・`waitForTaskToken`）は将来構成（09「将来構成」）
-- Schedule の無効化・削除で実行が始まらないことに気づく手段は未決（#109。#101 の DLQ のアラームは、呼び出しが起きない失敗を拾わない）
+- 実行が始まらない日のアラーム（#109）は、評価のふるまいを `dev` で確かめていない（08 #70。LocalStack では評価を確かめられない）
 - Dependabot の対象外（Terraform provider・LocalStack のイメージ・`run:` 内のバージョン）は手で更新する（`.github/dependabot.yml` の冒頭）
