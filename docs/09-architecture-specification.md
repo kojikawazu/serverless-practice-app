@@ -167,7 +167,7 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 
 | 変数 | 用途 | 参照箇所 |
 |------|------|----------|
-| `LOCALSTACK_AUTH_TOKEN` | LocalStack の起動に要る認証トークン（下記「LocalStack の認証」）。CI ではリポジトリのシークレットから渡す | `docker-compose.yml` |
+| `LOCALSTACK_AUTH_TOKEN` | LocalStack の起動に要る認証トークン（下記「LocalStack の認証」）。CI ではリポジトリのシークレット（Actions 用と Dependabot 用の 2 か所）から渡す | `docker-compose.yml` |
 | `LAMBDA_IGNORE_ARCHITECTURE` | 任意。`1` なら Lambda の `ARM_64` 指定を無視してホストのアーキテクチャで動かす。x86 のホスト（CI のランナー・Intel の Mac）用で、既定は `0`。Lambda は JS だけでネイティブモジュールを含まないため、動作は変わらない | `docker-compose.yml` |
 | `BUDGET_ALERT_EMAIL` | `dev` の予算アラートの通知先メールアドレス（下記「予算アラート」）。個人情報のため `.env` にだけ置く。同じ名前の環境変数があればそちらを優先する | `scripts/budget-alert.sh` |
 
@@ -204,6 +204,16 @@ LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイント�
 - トークンの要らない最後の版（`4.14.0`、2026-02 で更新停止）に固定する案もあったが、保守されない版では本物の AWS との挙動のずれが広がるため採らなかった
 - トークンは秘匿値として扱う（06「データ保護」）
 - イメージのタグは `docker-compose.yml` を正本とする
+
+CI の `it` に渡すトークンは、GitHub の 2 か所に同じ値を登録する。Dependabot が起動したワークフローには、Actions のシークレットは渡らず、Dependabot のシークレットだけが渡る（GitHub 公式「Automating Dependabot with GitHub Actions」）。
+
+| 登録先 | 渡る実行 | 登録の確かめ方（値は表示されない） |
+|---|---|---|
+| Actions のシークレット | 自分で出した PR・main への push | `gh secret list --app actions` |
+| Dependabot のシークレット | Dependabot が出した PR | `gh secret list --app dependabot` |
+
+- Dependabot のシークレットが無い間は、Dependabot の PR の `it` が LocalStack の起動前に落ちた。#103 の実行（2026-10-19）で、`it` のステップの環境変数 `LOCALSTACK_AUTH_TOKEN` が空だった。登録の後、Dependabot が起動した #112 の実行（2026-10-22、1 回目）ではトークンが渡り（ログ上は `***`）、`it` が通った（#113）
+- トークンを替えたら、手元の `.env` と 2 か所のシークレットをすべて更新する。どれかが古いままだと、その経路の PR だけが `it` で落ちる
 
 ## デプロイ
 
@@ -344,7 +354,7 @@ main へは PR を通してしか入れず、次の必須チェックがすべ�
 - **`changes` も必須にする。** `check` などは `changes` の結果で動くかを決めるため、`changes` が落ちると skipped になり、skipped は必須チェックを通る。判定が落ちたまま重い検査を飛ばして緑にしないよう、判定そのものを必須にする
 - **ブランチを最新にしてからのマージは求めない**（ruleset の `strict` は `false`）。PR を 1 本ずつ順に出すため、毎回 rebase して IT（約 12 分）を回し直す手間に見合わない
 - **承認は 0 件でよい。** 一人で開発するため。マージは人が行う（`git.md`）。管理者も ruleset を迂回できない（bypass なし）
-- **fork からの PR は `it` が落ちてマージできない。** リポジトリのシークレット（`LOCALSTACK_AUTH_TOKEN`）は fork の PR に渡らない。スキップして緑にはしない（`ci.yml` の `it`）。取り込むときは手元で IT を通す
+- **fork からの PR は `it` が落ちてマージできない。** リポジトリのシークレット（`LOCALSTACK_AUTH_TOKEN`）は fork の PR に渡らない。スキップして緑にはしない（`ci.yml` の `it`）。取り込むときは手元で IT を通す。Dependabot の PR は fork ではないが、Actions のシークレットではなく Dependabot のシークレットから受け取る（上記「LocalStack の認証」）
 - ジョブ名を変えると、必須チェックが来ない結果を待ち続けて PR が `pending` のまま止まる。ジョブ名を変えたら ruleset も直す
 
 設定は次のコマンドで確かめる。

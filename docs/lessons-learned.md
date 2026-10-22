@@ -4,6 +4,19 @@
 
 新しいエントリはこの見出しの直下に追記する（新しいものが上）。
 
+## 2026-10-22 Dependabot の PR だけ、必須チェックの it が LocalStack の起動前に落ち続けた
+
+### 概要
+
+Dependabot の PR 5 本（#103〜#107）が、必須チェックの `it` で落ちて 3 日間マージできなかった。依存の更新の中身ではなく、`LOCALSTACK_AUTH_TOKEN` が空で LocalStack が起動しなかったことが原因だった。Dependabot の PR には、Actions のシークレットが渡らない。
+
+### 詳細
+
+- 何が起きたか: 2026-10-19 に Dependabot が出した 5 本で、`it` だけが落ちた。ログでは `docker-compose.yml` の `${LOCALSTACK_AUTH_TOKEN:?...}` で止まっており、テストは 1 件も実行されていなかった。同じ時期の自分の PR と main の `ci` は通っていた
+- なぜ起きたか（根本原因）: Dependabot が起動したワークフローには、Actions のシークレットではなく Dependabot のシークレットが渡る。トークンは Actions のシークレットにだけ登録し、Dependabot のシークレットは 0 件だった。仕様書（06・08・09）は「トークンが渡らないのは fork からの PR」とだけ書いており、Dependabot の PR がシークレットを別に要することを想定していなかった
+- 教訓 / 次からどうする: CI でシークレットを使うジョブを足したら、Actions と Dependabot の両方に登録する。一部の PR でだけ落ちるときは、その PR を起動したのが誰か（`gh api .../actions/runs/<id>` の `actor` / `triggering_actor`）を確かめる。シークレットを登録した後の確認は、Dependabot が自分で起動した実行で行う。今回、人が再実行した #103 の 2 回目（`triggering_actor` が人）も通ったが、Actions と Dependabot の両方に同じ値があるため、どちらが渡ったかは区別できない。Dependabot が起動した #112 の 1 回目で、トークンが渡り `it` が通ることを確かめた
+- 関連: #113、09「LocalStack の認証」
+
 ## 2026-10-18 LocalStack の cdk diff（変更セット）が、Schedule の Target に足した RetryPolicy を「差分なし」と返した
 
 ### 概要
