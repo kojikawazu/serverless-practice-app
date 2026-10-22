@@ -68,8 +68,8 @@
 | Lambda 4 種 | CDK | |
 | Step Functions | CDK | |
 | Schedule 定義 | CDK | Terraform の Schedule group を名前で参照。`DeadLetterConfig` は Terraform の Scheduler の DLQ を SSM で参照 |
-| CloudWatch アラーム（Scheduler の DLQ） | CDK | rule のイベントパターンにアラーム名を書くため、rule と同じスタックに置く。数えるキューは SSM のキュー名で参照 |
-| EventBridge rule（失敗通知 2 つ） | CDK | 実行の失敗と、Scheduler の DLQ のアラーム。通知先 Lambda と同じスタックに置く |
+| CloudWatch アラーム（Scheduler の DLQ・実行が始まらない日） | CDK | rule のイベントパターンにアラーム名を書くため、rule と同じスタックに置く。数えるキューは SSM のキュー名、数える Schedule group は SSM の group 名で参照。実行が始まらない日のアラームは、壁時計の窓とウォームアップを使うため L1（`CfnAlarm`）で作る |
+| EventBridge rule（失敗通知 3 つ） | CDK | 実行の失敗と、2 つのアラーム（アラームごとに 1 つ）。通知先 Lambda と同じスタックに置く |
 
 **名前の先決め**: IAM ポリシーは Terraform が先に作るため、CDK が後から作るリソースの ARN を知らない。関数名・ステートマシン名を `serverless-practice-app-<stage>-<name>` の命名規約で固定し、Terraform 側はこの接頭辞のワイルドカードで権限を付ける。
 
@@ -264,14 +264,14 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 - **NAT Gateway は作らない**: 外部接続はすべてスタブなので、Lambda から外部へ出る経路が要らない。NAT Gateway は時間課金のため、置くとデモを止めている間も費用がかかる。VPC は LMI のキャパシティプロバイダにサブネットが要るため `dev` だけに作り、パブリックサブネットと IGW の経路にする（VPC・サブネット・IGW は無料）
 - **LMI の EC2 は存在する間だけ課金される**: `dev` の検証の間だけ作り、確かめたら消す（「LMI」の「費用と消し忘れへの備え」）
 - 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
-- **CloudWatch アラーム（Scheduler の DLQ。#101）は存在する間、月額で課金される**: 標準の解像度のアラームは、アラームのメトリクス 1 つあたり月 $0.10 で、無料枠は 10 個（料金ページの写しと第三者の解説による。公式の料金ページの該当箇所は読めていない）。このデモは 1 つで、`dev` は検証の間だけ存在する
+- **CloudWatch アラーム（Scheduler の DLQ。#101・実行が始まらない日。#109）は存在する間、月額で課金される**: 標準の解像度のアラームは、アラームのメトリクス 1 つあたり月 $0.10 で、無料枠は 10 個（料金ページの写しと第三者の解説による。公式の料金ページの該当箇所は読めていない）。このデモは 2 つで、`dev` は検証の間だけ存在する
 - 試し終えたら CDK → Terraform の順に削除する
 - 削除後も残る 2 つ（state バケットと CDK のブートストラップ）は、中身の保管料だけがかかる。どちらも量が小さく、残す理由がある（下記「`dev` での検証結果」の削除後に残るもの）
 - LMI のキャパシティプロバイダのロググループは、#66 までは IaC の管理外で残っていた。#71 で Terraform の管理下に置き、`down` で消えるようにした（下記「`dev` での検証結果」の「LMI」・「LMI」の「IaC の責務」）
 
 ### LocalStack での検証結果
 
-本物と同じように動くかが分からなかった 2 点を、LocalStack 2026.09.1 で確かめた（2026-10-11。#22）。3 点目のハートビート切れのエラー名は、#90 で同じ版で確かめた（2026-10-18）。4 点目の Scheduler の DLQ のアラームは、#101 で同じ版で確かめた（2026-10-20）。**LocalStack で動いたことは本物で動くことの証明にはならない**ため、どれも最後に `dev` で確認する（02「受け入れ条件」）。
+本物と同じように動くかが分からなかった 2 点を、LocalStack 2026.09.1 で確かめた（2026-10-11。#22）。3 点目のハートビート切れのエラー名は、#90 で同じ版で確かめた（2026-10-18）。4 点目の Scheduler の DLQ のアラームは、#101 で同じ版で確かめた（2026-10-20）。5 点目の実行が始まらない日のアラームは、#109 で同じ版で確かめた（2026-10-22）。**LocalStack で動いたことは本物で動くことの証明にはならない**ため、どれも最後に `dev` で確認する（02「受け入れ条件」）。
 
 | 点 | 結果 | `local` での扱い |
 |---|---|---|
@@ -279,6 +279,7 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 | Step Functions の状態変化イベントが EventBridge rule に届くか | **届く。** `FAILED` と `ABORTED` は rule を経て Slack 通知 Lambda まで届き、`SUCCEEDED` は rule の条件で除外される（いずれも IT で確認。08 #21・#22・#25〜#27）。`TIMED_OUT` も届く（定義を一時的に書き換えて 2 秒でタイムアウトさせ、IT で確認。08 #32）。LocalStack の `TIMED_OUT` では、実行の `error` / `cause` とイベントの `error` / `cause` がどちらも `null` だった。実 AWS でも、実行・通知のどちらにも値は無かった（下記「`dev` での検証結果」） | IT で確かめる。イベントの日時の項目が本物と違う形（文字列）で届くため、通知 Lambda は日時の項目を検証しない（07「状態変化イベント」・#30） |
 | `DataSync` のハートビートが切れたときのエラー名（#90） | **`States.Timeout`。** `States.HeartbeatTimeout` ではない。値が出たのは 4 か所で、すべて同じだった: 実行（`DescribeExecution`）の `error`（`cause` は `null`）、実行履歴（`GetExecutionHistory`）の `TaskTimedOut` イベントの `taskTimedOutEventDetails.error`（`resourceType: lambda`・`resource: invoke.waitForTaskToken`）、同じく `ExecutionFailed` イベントの `executionFailedEventDetails.error`、状態変化イベントの `error`（Slack スタブのログ）。公式の記述は揺れており、Task ステートのページは `States.Timeout`、エラー処理のページは `States.HeartbeatTimeout` をこの用途の名前としている。実 AWS の値は未観測 | IT（08 #54）と同じく、定義の `DataSync` の `HeartbeatSeconds` を一時的に 2 にし、`holdSeconds: 10` で実行した（関数は待ちの始めに 1 回だけハートビートを送るため、結果を返す前に切れる）。開始から約 3 秒で `FAILED` になり、タスクのタイムアウト（960 秒）ではない。対照として、書き換えない定義で同じ入力を実行すると 10 秒で `SUCCEEDED` になった。終わったら元の定義に戻し、書き換える前と一致することを確かめた |
 | Scheduler の DLQ のアラームが、DLQ への送信で `ALARM` になり、EventBridge に状態変化を出すか（#101） | **`ALARM` にはなるが、EventBridge には出ない。** DLQ に `send-message` で 1 件送ると、直後に `get-metric-statistics` で `NumberOfMessagesSent` のデータポイントが 1 つ見え、アラームは送信の約 4 分 44 秒後に `OK` → `ALARM`、さらに約 11 分 22 秒後に `ALARM` → `OK` になった（`describe-alarms` を 15〜20 秒ごとに読んだ時刻。アラームの履歴の時刻は送信より前の時刻を指しており、使っていない）。この間、Slack 通知 Lambda のログストリームは 0 件だった。同じ形のイベント（`source: aws.cloudwatch`・`detail-type: CloudWatch Alarm State Change`・`detail.alarmName`・`detail.state.value: ALARM`・`detail.state.reason`）を `put-events` で入れると、rule を経て Slack スタブのログ（`message: アラームを通知しました（スタブ）`）が出た | 端から端まで（DLQ → アラーム → rule → 通知）は `dev` で確かめた（下記「`dev` での検証結果」。08 #66）。`dev` ではアラームの履歴の時刻が送信の後を指し、`ALARM` から `OK` に戻るまでは 5 分だった（LocalStack の約 11 分 22 秒と違う）。`local` ではアラームの評価と、rule → 通知 Lambda の経路を別々に確かめる（08 #65）。Scheduler が DLQ へ送ることは、LocalStack では Scheduler が起動しないため確かめられない |
+| 実行が始まらない日のアラーム（`AWS/Scheduler` の `InvocationAttemptCount`、期間 1 日、壁時計の窓、ウォームアップ）が評価されるか（#109） | **設定は受け付けるが、評価に反映されないように見える。** `put-metric-alarm` に `EvaluationWindow`（`WallClockWindow`、`Asia/Tokyo`）と `WarmUpConfiguration`（1 分）を渡すと、`describe-alarms` は同じ値を返した。ただし、作った時点（ウォームアップ中のはず）で `ALARM` になり、`StateReasonData` の `startDate` は照会の時刻そのもので、日本時間の 0 時（`15:00Z`）に揃っていなかった。`put-metric-data` で同じメトリクスに 1 を入れた約 1 分後も `ALARM` のままだった（それより後は見ていない。壁時計の窓なら前日を評価するため正しい動きだが、評価の間隔など別の理由と区別できない）。対照として、期間 1 分・既定の窓の同じアラームは、作った時点で `ALARM`、データを入れた約 1 分後に `OK` になった。**`AWS/States` のメトリクスは出ない。** `SUCCEEDED` の実行から約 3 分半の間、`list-metrics --namespace AWS/States` は 0 件、`ExecutionsStarted` の `get-metric-statistics` もデータポイント 0 件だった（同じ時点で `AWS/Lambda` と `AWS/SQS` は出ていた） **CloudFormation で作ると 2 つの設定が落ちる。** CDK でデプロイしたアラームは、デプロイ済みのテンプレート（`get-template`）には `EvaluationWindow` と `WarmUpConfiguration` があるのに、`describe-alarms` ではどちらも無かった。状態は作った直後から `OK`（理由は `Threshold Crossed`）で、上の観測で `put-metric-data` に入れた値が残っていたためと考えられる（確かめていない）。**rule → 通知 Lambda は届く。** 状態変化イベントを `put-events` で入れると、このアラーム名の `ALARM` は rule を経て Slack スタブのログ（`message: アラームを通知しました（スタブ）`）が出た。同じアラーム名の `OK`、関係の無いアラーム名の `ALARM` は出なかった。ただし、デプロイの約 35 秒後に入れた 1 回目の `ALARM` は届かず、約 2 分後に入れ直した 2 回目と、その後の 3 回目は届いた。1 回目が届かなかった理由は確かめていない。対照として、同じ時期に DLQ のアラームの rule へ入れた `ALARM` は届いた | 評価のふるまいは `dev` で確かめる（04「リトライ」の「実行が始まらない日の通知」）。`local` では rule → 通知 Lambda の経路だけを確かめる（08 #69）。観測に使った一時的なアラームは削除した |
 
 ### `dev` での検証結果
 

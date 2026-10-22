@@ -85,6 +85,44 @@ function stateMachineDefinition(json: TemplateJson): {
   ) as ReturnType<typeof stateMachineDefinition>;
 }
 
+/**
+ * アラームの論理 ID を、アラーム名から引く。rule のパターンが指すアラーム（`Ref`）を突き合わせるために使う。
+ *
+ * @param json - テンプレート
+ * @param alarmName - アラーム名
+ * @returns そのアラームの論理 ID
+ */
+function alarmLogicalId(json: TemplateJson, alarmName: string): string {
+  const entry = Object.entries(json.Resources).find(
+    ([, r]) =>
+      r.Type === "AWS::CloudWatch::Alarm" &&
+      r.Properties.AlarmName === alarmName,
+  );
+  if (entry === undefined) {
+    throw new Error(`アラーム ${alarmName} がテンプレートに無い`);
+  }
+  return entry[0];
+}
+
+/**
+ * rule のパターンが指すアラーム名（`detail.alarmName`）を、rule 名から引く。
+ *
+ * @param json - テンプレート
+ * @param ruleName - rule 名
+ * @returns パターンの `detail.alarmName`
+ */
+function ruleAlarmNames(json: TemplateJson, ruleName: string): unknown {
+  const rule = Object.values(json.Resources).find(
+    (r) => r.Type === "AWS::Events::Rule" && r.Properties.Name === ruleName,
+  );
+  if (rule === undefined) {
+    throw new Error(`rule ${ruleName} がテンプレートに無い`);
+  }
+  // EventPattern は型の無い JSON のため、読む形だけを与える
+  return (rule.Properties.EventPattern as { detail: { alarmName: unknown } })
+    .detail.alarmName;
+}
+
 let template: Template;
 let json: TemplateJson;
 
@@ -284,15 +322,137 @@ describe("BatchStack（local）", () => {
         Targets: [Match.objectLike({ Arn: Match.anyValue() })],
       });
     });
+
+    it("#109: 実行が始まらない日のアラームは、Scheduler の起動の試みを日本時間の 1 日ごとに数え、0 回の日（データの無い日を含む）を ALARM にする", () => {
+      template.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: "serverless-practice-app-local-scheduler-missed-run",
+        Namespace: "AWS/Scheduler",
+        MetricName: "InvocationAttemptCount",
+        Dimensions: [
+          {
+            Name: "ScheduleGroup",
+            Value: ssmRef(
+              json,
+              "/serverless-practice-app/local/schedule-group/name",
+            ),
+          },
+        ],
+        Statistic: "Sum",
+        Period: 86400,
+        EvaluationPeriods: 1,
+        Threshold: 1,
+        ComparisonOperator: "LessThanThreshold",
+        TreatMissingData: "breaching",
+        EvaluationWindow: { WallClockWindow: { Timezone: "Asia/Tokyo" } },
+      });
+    });
+
+    it("#109: 実行が始まらない日のアラームは、作ってから 2 日（上限）経つまで評価しない", () => {
+      template.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: "serverless-practice-app-local-scheduler-missed-run",
+        WarmUpConfiguration: {
+          WarmUpPeriodDurationInMinutes: 2880,
+          OnlyStartEvaluatingAfterWarmUpPeriodEnds: true,
+        },
+      });
+    });
+
+    it("#109: EventBridge rule は、実行が始まらない日のアラームが ALARM になったことを Slack 通知へ流す", () => {
+      template.hasResourceProperties("AWS::Events::Rule", {
+        Name: "serverless-practice-app-local-scheduler-missed-run-alarm",
+        EventPattern: {
+          source: ["aws.cloudwatch"],
+          "detail-type": ["CloudWatch Alarm State Change"],
+          detail: {
+            alarmName: [
+              {
+                Ref: alarmLogicalId(
+                  json,
+                  "serverless-practice-app-local-scheduler-missed-run",
+                ),
+              },
+            ],
+            state: { value: ["ALARM"] },
+          },
+        },
+        Targets: [Match.objectLike({ Arn: Match.anyValue() })],
+      });
+    });
   });
 
   describe("異常系（設定ずれの検出）", () => {
     // メッセージ数（ApproximateNumberOfMessagesVisible）は DLQ を空にするまで減らず、ALARM のままになって次の失敗を通知しない
     it("#101: DLQ のアラームはメッセージ数ではなく、届いた数（NumberOfMessagesSent）で数える", () => {
-      template.resourceCountIs("AWS::CloudWatch::Alarm", 1);
       template.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: "serverless-practice-app-local-scheduler-dlq",
         MetricName: "NumberOfMessagesSent",
       });
+    });
+
+    it("#109: アラームは DLQ の送信数と、実行が始まらない日の 2 つだけ", () => {
+      template.resourceCountIs("AWS::CloudWatch::Alarm", 2);
+    });
+
+    // ExecutionsStarted は手動の実行（batch.sh run）も数えるため、その日に手動の実行があると定時の起動の欠けが隠れる
+    it("#109: 実行が始まらない日は、Step Functions の実行数（AWS/States）ではなく、Scheduler の起動の試みで数える", () => {
+      for (const alarm of Object.values(json.Resources).filter(
+        (r) => r.Type === "AWS::CloudWatch::Alarm",
+      )) {
+        expect(alarm.Properties.Namespace).not.toBe("AWS/States");
+      }
+    });
+
+    // アラームは ScheduleGroup 単位でしか数えられない。2 本目があると、片方が止まっても合計が 1 以上になり気づけない
+    it("#109: Schedule は 1 本だけ（実行が始まらない日のアラームの前提）", () => {
+      template.resourceCountIs("AWS::Scheduler::Schedule", 1);
+    });
+
+    // ずれると、9:00 の起動が評価の 1 日をまたいで数えられ、起動した日にも ALARM になる
+    it("#109: アラームの 1 日の区切りは、Schedule と同じタイムゾーン", () => {
+      const schedule = Object.values(json.Resources).find(
+        (r) => r.Type === "AWS::Scheduler::Schedule",
+      );
+      const alarm =
+        json.Resources[
+          alarmLogicalId(
+            json,
+            "serverless-practice-app-local-scheduler-missed-run",
+          )
+        ];
+      expect(alarm?.Properties.EvaluationWindow).toEqual({
+        WallClockWindow: {
+          Timezone: schedule?.Properties.ScheduleExpressionTimezone,
+        },
+      });
+    });
+
+    it("#109: 2 つのアラームの rule は、それぞれ自分のアラームだけを流す（取り違えない）", () => {
+      expect(
+        ruleAlarmNames(
+          json,
+          "serverless-practice-app-local-scheduler-dlq-alarm",
+        ),
+      ).toEqual([
+        {
+          Ref: alarmLogicalId(
+            json,
+            "serverless-practice-app-local-scheduler-dlq",
+          ),
+        },
+      ]);
+      expect(
+        ruleAlarmNames(
+          json,
+          "serverless-practice-app-local-scheduler-missed-run-alarm",
+        ),
+      ).toEqual([
+        {
+          Ref: alarmLogicalId(
+            json,
+            "serverless-practice-app-local-scheduler-missed-run",
+          ),
+        },
+      ]);
     });
 
     it("IAM のロール・ポリシーを 1 つも作らない（権限は Terraform が持つ。grant* が足していない）", () => {
@@ -413,12 +573,13 @@ describe("BatchStack（local）", () => {
       }
     });
 
-    it("Lambda を外から呼べるのは、EventBridge の 2 つの rule から Slack 通知への呼び出しだけ", () => {
-      template.resourceCountIs("AWS::Lambda::Permission", 2);
+    it("Lambda を外から呼べるのは、EventBridge の 3 つの rule から Slack 通知への呼び出しだけ", () => {
+      template.resourceCountIs("AWS::Lambda::Permission", 3);
       const permissions = Object.values(json.Resources).filter(
         (r) => r.Type === "AWS::Lambda::Permission",
       );
       expect(permissions.map((p) => p.Properties.Principal)).toEqual([
+        "events.amazonaws.com",
         "events.amazonaws.com",
         "events.amazonaws.com",
       ]);

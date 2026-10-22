@@ -49,7 +49,7 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 
 - Consumer 側の失敗（DLQ 行き）は通知されない。元資料のリスク 1 をそのまま再現するためで、DLQ アラームは将来構成とする（09「将来構成」）
 - Scheduler がステートマシンを起動できなかったときも通知する（#101）。実行が始まらないため状態変化イベントは出ない。Scheduler が呼び出しを DLQ へ送り、DLQ のアラームが `ALARM` になったことを EventBridge rule が拾って、同じ Slack 通知 Lambda を呼ぶ（04「リトライ」）
-- Schedule の無効化・削除は通知されない（呼び出しそのものが起きないため、DLQ にも届かない）。気づく手段は #109 で決める（`docs/guides/eventbridge.md`「通知が届かない経路が残っている」）
+- Schedule の無効化・削除など、Scheduler が起動を試みなかった日も通知する（#109）。実行も DLQ への送信も起きないため、上の 2 つには乗らない。Scheduler が起動を試みた回数を日本時間の 1 日ごとに数えるアラームが、0 回の日の翌 0 時過ぎに `ALARM` になり、同じ Slack 通知 Lambda を呼ぶ（04「リトライ」の「実行が始まらない日の通知」）
 
 ### F-6: 失敗の注入
 
