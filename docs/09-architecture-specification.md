@@ -110,7 +110,7 @@ BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（
 
 ![システム構成図。Schedule が Step Functions を起動し、投入 Lambda → SQS FIFO → Consumer Lambda → SendGrid スタブと、データ連携 Lambda（非同期 + waitForTaskToken）→ S3・外部スタブの 2 系統が流れる。失敗は EventBridge rule → Slack 通知 Lambda → Slack スタブに集まり、Scheduler の起動の失敗（DLQ の送信数）と起動を試みなかった日（試行回数 0）は CloudWatch アラームを経て同じ rule に届く。枠の色は管理元（CDK / Terraform / スタブ）](images/architecture.drawio.svg)
 
-図は [`images/architecture.drawio.svg`](images/architecture.drawio.svg) が正本で、draw.io の図のデータを SVG に埋め込んでいる。draw.io（デスクトップ版・VS Code の拡張・Web 版）でそのまま開いて編集し、**同じ `.drawio.svg` のまま保存する**（PNG などへ書き出して別のファイルを置かない。元データと画像がずれるため）。
+図は [`images/architecture.drawio.svg`](images/architecture.drawio.svg) が正本で、draw.io の図のデータを SVG に埋め込んでいる。draw.io（デスクトップ版・VS Code の拡張・Web 版）でそのまま開いて編集し、**同じ `.drawio.svg` のまま保存する**（PNG などへ書き出して別のファイルを置かない。元データと画像がずれるため）。上下左右の余白（40px）は、図の最背面に置いた透明でロックした枠（id `margin`）で作っている。この枠は消さず、図を広げたときはロックを外して枠も広げる（書き出しの余白の設定は図のデータに残らず、draw.io 32.5.5 の CLI の `-b` は右と下だけ 2 倍になるため使わない）。
 
 ## 環境変数
 
