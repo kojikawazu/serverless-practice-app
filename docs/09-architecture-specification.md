@@ -110,7 +110,7 @@ BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（
 
 ![システム構成図。Schedule が Step Functions を起動し、投入 Lambda → SQS FIFO → Consumer Lambda → SendGrid スタブと、データ連携 Lambda（非同期 + waitForTaskToken）→ S3・外部スタブの 2 系統が流れる。失敗は EventBridge rule → Slack 通知 Lambda → Slack スタブに集まり、Scheduler の起動の失敗（DLQ の送信数）と起動を試みなかった日（試行回数 0）は CloudWatch アラームを経て同じ rule に届く。枠の色は管理元（CDK / Terraform / スタブ）](images/architecture.drawio.svg)
 
-図は [`images/architecture.drawio.svg`](images/architecture.drawio.svg) が正本で、draw.io の図のデータを SVG に埋め込んでいる。draw.io（デスクトップ版・VS Code の拡張・Web 版）でそのまま開いて編集し、**同じ `.drawio.svg` のまま保存する**（PNG などへ書き出して別のファイルを置かない。元データと画像がずれるため）。上下左右の余白（40px）は、図の最背面に置いた透明でロックした枠（id `margin`）で作っている。この枠は消さず、図を広げたときはロックを外して枠も広げる（書き出しの余白の設定は図のデータに残らず、draw.io 32.5.5 の CLI の `-b` は右と下だけ 2 倍になるため使わない）。
+図は [`images/architecture.drawio.svg`](images/architecture.drawio.svg) が正本で、draw.io の図のデータを SVG に埋め込んでいる。シーケンス図（[`images/sequences/`](images/sequences/)。03「処理の流れ」と本書「デプロイ」）も同じ形式で、以下の扱いは `docs/images/` のすべての図に共通する。draw.io（デスクトップ版・VS Code の拡張・Web 版）でそのまま開いて編集し、**同じ `.drawio.svg` のまま保存する**（PNG などへ書き出して別のファイルを置かない。元データと画像がずれるため）。上下左右の余白（40px）は、図の最背面に置いた透明でロックした枠（id `margin`）で作っている。この枠は消さず、図を広げたときはロックを外して枠も広げる（書き出しの余白の設定は図のデータに残らず、draw.io 32.5.5 の CLI の `-b` は右と下だけ 2 倍になるため使わない）。
 
 ## 環境変数
 
@@ -181,6 +181,12 @@ CI の `it` に渡すトークンは、GitHub の 2 か所に同じ値を登録�
 ### 順序
 
 Terraform → CDK の順にデプロイし、削除はその逆（CDK → Terraform）で行う。逆にすると、CDK のスタックが参照中のロールやキューが先に消える。
+
+コマンドは `scripts/stack.sh <stage> up` / `down` の 1 本に固定している（スクリプトの冒頭が正本）。
+
+![デプロイのシーケンス図。stack.sh が Terraform の init と apply を呼び、Terraform は state バケットの state を読んでロックを取り、IAM ロール・SQS・S3・Schedule group・LMI（dev のみ）を作って ARN・名前・URL を SSM に書き出し、state を書いてロックを外す。続けて CDK の bootstrap と deploy を呼び、CDK は SSM の値を読まずにテンプレートを合成する。CloudFormation がデプロイ時に SSM の値を解決し、Lambda 4 種・ステートマシン・Schedule・アラーム 2 つ・rule 3 つを作る](images/sequences/deploy-up.drawio.svg)
+
+![削除のシーケンス図。stack.sh が先に CDK の destroy を呼び、CloudFormation がスタックのリソースを消す。続けて Terraform の init と destroy を呼び、Terraform は state を読んでロックを取り、土台のリソースと SSM パラメータを消して state を書く。消した後も state バケットと CDK のブートストラップは残る](images/sequences/deploy-down.drawio.svg)
 
 ### ステージ
 

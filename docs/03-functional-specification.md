@@ -96,32 +96,43 @@ S3 のキーの日付と `exportedAt` は、同じ時刻（UTC）から作る。
 
 ## 処理の流れ
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant SCH as Scheduler
-    participant SFN as Step Functions
-    participant ENQ as 投入 Lambda
-    participant Q as SQS FIFO
-    participant CON as Consumer Lambda
-    participant SYNC as データ連携 Lambda
-    participant RULE as EventBridge rule
-    participant NOTIFY as Slack 通知 Lambda
+図は [`images/sequences/`](images/sequences/) の `.drawio.svg` が正本（編集の仕方は [09「システム構成図」](09-architecture-specification.md#システム構成図)）。丸数字はメッセージの順。タイムアウト・リトライの秒数や回数は図に書かず、[04 非機能仕様書](04-non-functional-specification.md) を正本とする。
 
-    SCH->>SFN: StartExecution
-    SFN->>ENQ: Invoke（実行名, failAt）
-    ENQ->>Q: SendMessageBatch
-    ENQ-->>SFN: 件数
-    Q-)CON: イベントソース（最大 5 件）
-    Note over CON: Step Functions の外で動く。<br/>失敗は通知に乗らず DLQ へ
-    SFN-)SYNC: Invoke（非同期。実行名, failAt, holdSeconds, タスクトークン）
-    SYNC-)SFN: SendTaskHeartbeat（holdSeconds の間、60 秒ごと）
-    SYNC-)SFN: SendTaskSuccess（件数・S3 キー）/ SendTaskFailure
-    SFN-)RULE: 状態変化（FAILED / TIMED_OUT / ABORTED のみ）
-    RULE-)NOTIFY: Invoke（非同期）
-    Note over SCH,NOTIFY: 起動に失敗したとき（#101）: Scheduler が呼び出しを DLQ へ送り、<br/>DLQ のアラームの ALARM への変化を rule が拾って同じ Lambda を呼ぶ
-    Note over SCH,NOTIFY: 起動を試みなかった日（#109）: 翌 0 時過ぎに実行が始まらない日のアラームが ALARM になり、<br/>別の rule が拾って同じ Lambda を呼ぶ
-```
+### 正常系
+
+![正常系のシーケンス図。Scheduler が Step Functions を起動し、投入 Lambda が MySQL スタブから配信対象を取って SQS FIFO へ積む。Consumer Lambda は Step Functions の外でキューから受け取り、SendGrid スタブへ送る。並行して Step Functions はデータ連携 Lambda を非同期で呼び、関数は S3・BigQuery・Cuenote FC へ書いてから、ハートビートと SendTaskSuccess をタスクトークンで返す。実行は SUCCEEDED で、通知はしない](images/sequences/normal.drawio.svg)
+
+### 実行の失敗
+
+実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、状態変化イベントが EventBridge rule を経て Slack 通知 Lambda に届く（02「F-5」）。メールの送信の失敗だけは Step Functions の外で起き、通知されない。
+
+#### 投入の失敗（`failAt: enqueue`）
+
+![投入の失敗のシーケンス図。投入 Lambda がキューへ積む前に InjectedFailureError で失敗し、Retry の対象外のため実行は FAILED になる。DataSync は動かない。状態変化イベントが rule を経て Slack 通知 Lambda に届き、Slack スタブへ通知する](images/sequences/fail-enqueue.drawio.svg)
+
+#### データ連携の失敗（`failAt: dataSync`）
+
+![データ連携の失敗のシーケンス図。投入は正常系と同じ。データ連携 Lambda は配信対象を取って S3 へ書いた後に注入エラーで失敗し、SendTaskFailure で InjectedFailureError を返す。S3 のファイルは残り、BigQuery・Cuenote FC へは書かない。Retry の対象外のため実行は FAILED になり、Slack へ通知される](images/sequences/fail-data-sync.drawio.svg)
+
+#### データ連携の結果が返らない（ハートビート切れ）
+
+![データ連携の結果が返らないときのシーケンス図。データ連携 Lambda が SendTask* の失敗などで結果を返せずに止まり、Step Functions はハートビートのタイムアウトで打ち切って States.Timeout で FAILED にする（LocalStack で観測。実 AWS は未観測）。Slack へ通知される。実行全体のタイムアウトを越えたときは TIMED_OUT になり、エラー名・原因の無い通知が同じ経路で届く](images/sequences/fail-heartbeat-timeout.drawio.svg)
+
+#### メールの送信の失敗（`failAt: consumer`）
+
+![メールの送信の失敗のシーケンス図。投入 Lambda が simulateFailure を付けて積み、実行は SUCCEEDED で終わる。Consumer Lambda は注入エラーで失敗し、同じグループの後続も失敗として batchItemFailures で返す。可視性タイムアウトの後の再配信を最大受信回数まで繰り返し、メッセージは DLQ へ移る。Slack へは通知せず、DLQ のメッセージ数で確かめる](images/sequences/fail-consumer.drawio.svg)
+
+### 起動されない失敗
+
+実行が始まらないため、状態変化イベントは出ない。CloudWatch アラームの `ALARM` への変化を EventBridge rule が拾い、同じ Slack 通知 Lambda を呼ぶ（04「リトライ」）。
+
+#### Scheduler の起動の失敗（#101）
+
+![Scheduler の起動の失敗のシーケンス図。Scheduler の StartExecution が権限の誤りなどで失敗し、Scheduler は呼び出しを属性付きで Scheduler の DLQ へ送る。DLQ の送信数が 1 以上で CloudWatch アラームが ALARM になり、rule を経て Slack 通知 Lambda がアラーム名と理由を通知する。失敗の理由は DLQ のメッセージの属性で確かめる](images/sequences/scheduler-dlq.drawio.svg)
+
+#### 起動を試みなかった日（#109）
+
+![起動を試みなかった日のシーケンス図。Schedule が無効化・削除・式の変更をされると、その日は起動を試みず、起動の試行回数のデータが出ない。CloudWatch アラームは日本時間の 0 時過ぎに前日を評価し、データが無いため ALARM になり、rule を経て Slack 通知 Lambda が通知する。評価のふるまいは実 AWS では未観測（#116）](images/sequences/missed-run.drawio.svg)
 
 ## 操作方針
 
