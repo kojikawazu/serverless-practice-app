@@ -108,48 +108,9 @@ BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（
 
 ## システム構成図
 
-```mermaid
-flowchart LR
-    subgraph CDK["CDK 管理"]
-        SCH[Schedule 定義]
-        SFN[Step Functions]
-        ENQ[投入 Lambda]
-        SYNC[データ連携 Lambda]
-        CON[Consumer Lambda]
-        RULE[EventBridge rule]
-        ALARM[CloudWatch アラーム]
-        NOTIFY[Slack 通知 Lambda]
-    end
-    subgraph TF["Terraform 管理"]
-        GRP[Schedule group]
-        Q[[SQS FIFO]]
-        DLQ[[DLQ]]
-        SDLQ[[Scheduler の DLQ]]
-        S3[(S3)]
-        IAM[IAM ロール]
-        SSM[SSM パラメータ]
-        CP[キャパシティプロバイダ・VPC<br/>dev のみ]
-    end
-    subgraph STUB["スタブ"]
-        SG[SendGrid]
-        SLACK[Slack]
-        EXT[MySQL / BigQuery / Cuenote FC]
-    end
+![システム構成図。Schedule が Step Functions を起動し、投入 Lambda → SQS FIFO → Consumer Lambda → SendGrid スタブと、データ連携 Lambda（非同期 + waitForTaskToken）→ S3・外部スタブの 2 系統が流れる。失敗は EventBridge rule → Slack 通知 Lambda → Slack スタブに集まり、Scheduler の起動の失敗（DLQ の送信数）と起動を試みなかった日（試行回数 0）は CloudWatch アラームを経て同じ rule に届く。枠の色は管理元（CDK / Terraform / スタブ）](images/architecture.drawio.svg)
 
-    GRP -.- SCH
-    SCH --> SFN
-    SFN --> ENQ --> Q --> CON --> SG
-    ENQ -. 配信対象の取得 .-> EXT
-    Q -. 3 回失敗 .-> DLQ
-    SFN -- 非同期 + waitForTaskToken --> SYNC
-    SYNC -. SendTask* .-> SFN
-    SYNC -. dev は LMI で動く .- CP
-    SYNC --> S3
-    SYNC --> EXT
-    SFN -. FAILED / TIMED_OUT / ABORTED .-> RULE --> NOTIFY --> SLACK
-    SCH -. 起動に失敗 .-> SDLQ -. 送信数 .-> ALARM -. ALARM .-> RULE
-    SSM -. ARN・名前 .-> CDK
-```
+図は [`images/architecture.drawio.svg`](images/architecture.drawio.svg) が正本で、draw.io の図のデータを SVG に埋め込んでいる。draw.io（デスクトップ版・VS Code の拡張・Web 版）でそのまま開いて編集し、**同じ `.drawio.svg` のまま保存する**（PNG などへ書き出して別のファイルを置かない。元データと画像がずれるため）。
 
 ## 環境変数
 
