@@ -181,7 +181,7 @@ Slack 通知 Lambda が使う `detail` のフィールドは `alarmName` / `stat
 - 通知に使う 3 つのフィールドは、公式「Alarm events and EventBridge」の例から作ったスキーマのとおりの位置・型で届いた。スキーマは変えていない。テストの偽物は、この実物に合わせた（`functions/test/schemas/alarm-state-change-event.test.ts`）
 - `state.reason` の文は、公式の例（`1 out of the last 1 datapoints ... (minimum 1 datapoint for OK -> ALARM transition).`）と違い、`1 datapoint [...] was greater than or equal to the threshold (1.0).` だった。通知は文をそのまま出すだけで、文面を解釈しない
 - LocalStack はアラームの状態変化を EventBridge に出さない（09「LocalStack での検証結果」）。この形は実 AWS でだけ観測した
-- 実行が始まらない日のアラーム（#109）のイベントは未観測。上の実物は DLQ のアラームのもので、通知に使う 3 つのフィールドは、アラームの種類によらず同じ位置にあると公式の例から推測している。`dev` で観測する
+- 実行が始まらない日のアラーム（#109）のイベントは未観測。上の実物は DLQ のアラームのもので、通知に使う 3 つのフィールドは、アラームの種類によらず同じ位置にあると公式の例から推測している。`dev` での観測は費用のため見送った（04「リトライ」の「実行が始まらない日の通知」。#116）
 
 ### Scheduler の DLQ のメッセージ
 

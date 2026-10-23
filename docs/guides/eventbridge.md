@@ -182,7 +182,7 @@ Slack 通知 Lambda も、届いたイベントを検証し直す（06「[入力
 | 止まるところ | 公式の振る舞い | このプロジェクト |
 |---|---|---|
 | Scheduler → ステートマシン（起動そのもの） | 24 時間・185 回で、DLQ が無ければ捨てられる（上記） | **#101 で手当てした。** DLQ へ送られた呼び出しを、DLQ のアラーム → ルール → Slack 通知 Lambda で通知する（04「[リトライ](../04-non-functional-specification.md#リトライ)」の「起動の失敗の通知」）。`dev` で端から端まで確かめた。実行ロールの権限の誤り（`AccessDeniedException`）とステートマシンの削除（`StateMachineDoesNotExist`）はやり直されず、予定の約 4 分後に通知された。やり直せるエラーでは、通知はやり直しを使い切った後（最大 24 時間後）になる（どのエラーがやり直されるかは一部だけ観測。09「[`dev` での検証結果](../09-architecture-specification.md#dev-での検証結果)」） |
-| Schedule そのもの（無効化・削除） | 呼び出しが起きない | **#109 で手当てした。** Scheduler が起動を試みた回数（`AWS/Scheduler` の `InvocationAttemptCount`）を日本時間の 1 日ごとに数え、0 回の日をアラーム → ルール → Slack 通知 Lambda で通知する（04「[リトライ](../04-non-functional-specification.md#リトライ)」の「実行が始まらない日の通知」）。気づくのは翌 0 時過ぎで、メトリクスが欠けた日は誤通知になる。`local` ではルール → 通知の経路だけを確かめた。評価のふるまいは `dev` で未確認 |
+| Schedule そのもの（無効化・削除） | 呼び出しが起きない | **#109 で手当てした。** Scheduler が起動を試みた回数（`AWS/Scheduler` の `InvocationAttemptCount`）を日本時間の 1 日ごとに数え、0 回の日をアラーム → ルール → Slack 通知 Lambda で通知する（04「[リトライ](../04-non-functional-specification.md#リトライ)」の「実行が始まらない日の通知」）。気づくのは翌 0 時過ぎで、メトリクスが欠けた日は誤通知になる。`local` ではルール → 通知の経路だけを確かめた。`dev` ではウォームアップ中の状態だけを確かめ、評価のふるまいは未観測（費用のため見送り。#116） |
 | CloudWatch アラーム → イベントバス | アラームの状態変化イベントの EventBridge への配信は保証される（公式「Alarm events and EventBridge」） | LocalStack は出さない（下記）。アラームのメトリクス（SQS の `NumberOfMessagesSent`）の欠けは未観測 |
 | Step Functions → イベントバス | 状態変化イベントはベストエフォート（[Step Functions 解説](step-functions.md#状態変化イベントだけに通知を頼っている)） | 欠けたときの手当ては無い |
 | ルール → Lambda | 24 時間・185 回で捨てられる | DLQ は無い |
