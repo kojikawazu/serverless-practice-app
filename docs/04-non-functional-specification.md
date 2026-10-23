@@ -85,8 +85,9 @@
 - **続けて起動しなかった日は通知されない**: アラームの通知は状態が変わったときだけで、2 日目も `ALARM` のままのため、通知は最初の 1 日だけになる。起動を試みた日が終わると `OK` に戻り、次の欠けでもう一度通知される。DLQ のアラーム（送信数で数え、届いた期間だけ `ALARM`）と違い、欠けが続く間 `ALARM` のままであることは「まだ直っていない」状態を表すため、このままにする
 - **前提: Schedule group に Schedule が 1 本だけ**: ディメンションは `ScheduleGroup` だけで、Schedule 単位のメトリクスは無い（公式「Monitoring Amazon EventBridge Scheduler with Amazon CloudWatch」）。group に 2 本目を足すと、片方が止まっても合計が 1 以上になり気づけない。スタックの Schedule が 1 本であることを CDK の UT で固定する
 - **誤通知が出うる**: メトリクスはベストエフォートで、欠けうる（同じ公式ページ）。欠けた日は、起動していても `ALARM` になる。通知を受けたら `list-executions` で、その日の定時の起動の実行（実行名が UUID）があるかを確かめる。見逃すより誤通知の側に倒す（`error-handling.md`「判定不能を正常値に丸めない」）
-- **`local` では評価を確かめられない**: LocalStack は、CLI で直接作ればウォームアップと壁時計の窓を受け付けるが評価に反映しないように見え、CloudFormation で作ると 2 つの設定そのものを落とす。Scheduler が起動しないため `InvocationAttemptCount` も出ない（09「LocalStack での検証結果」）。`local` では rule → 通知 Lambda の経路だけを確かめ、評価は `dev` で確かめる
-- **未観測**: 次はどれも公式の記述によるもので、`dev` で観測する。`dev` の定時の起動で `InvocationAttemptCount` がディメンション `ScheduleGroup` で出ること、壁時計の窓が日本時間の 0 時で区切ること、ウォームアップの間 `INSUFFICIENT_DATA` のままであること
+- **`local` では評価を確かめられない**: LocalStack は、CLI で直接作ればウォームアップと壁時計の窓を受け付けるが評価に反映しないように見え、CloudFormation で作ると 2 つの設定そのものを落とす。Scheduler が起動しないため `InvocationAttemptCount` も出ない（09「LocalStack での検証結果」）。`local` では rule → 通知 Lambda の経路だけを確かめる
+- **`dev` で観測したのはウォームアップ中の状態だけ**（実 AWS、2026-10-23、#109）: CDK で作った直後のアラームは、`describe-alarms` で `StateValue: INSUFFICIENT_DATA`・`StateReason: Alarm is in Warm-Up`・`EvaluationState: IN_WARM_UP` だった（作ってから約 5 分後に 1 回読んだだけで、ウォームアップの間ずっとそのままかは見ていない）。壁時計の窓とウォームアップの設定も、CDK で書いた値のまま返った（09「`dev` での検証結果」）
+- **未観測**: 次はどれも公式の記述によるもので、観測していない。`dev` の定時の起動で `InvocationAttemptCount` がディメンション `ScheduleGroup` で出ること、壁時計の窓が日本時間の 0 時で区切ること、起動を試みた日の後に `OK`・試みなかった日の後に `ALARM` になり Slack 通知 Lambda まで届くこと。評価を見るには `dev` を約 3.5 日立てる必要があり、その間 LMI の費用（約 $11）がかかるため、`dev` での観測を見送った。費用をかけずに立てる手段ができたら観測する（#116）
 - **アラームの費用**: 標準の解像度のメトリクスのアラームが 1 つ増え、計 2 つ（09「費用」）
 
 **公式の推奨との違い**（#90。2026-10-18 に判断）: Lambda タスクの `Retry` は、公式の[ベストプラクティス](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html)と CDK の既定（`retryOnServiceExceptions`）に合わせず、上の表のままにする。CDK の UT で対象を固定している。
