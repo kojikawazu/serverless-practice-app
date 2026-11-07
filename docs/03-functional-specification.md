@@ -102,6 +102,18 @@ S3 のキーの日付と `exportedAt` は、同じ時刻（UTC）から作る。
 
 ![正常系のシーケンス図。Scheduler が Step Functions を起動し、投入 Lambda が MySQL スタブから配信対象を取って SQS FIFO へ積む。Consumer Lambda は Step Functions の外でキューから受け取り、SendGrid スタブへ送る。並行して Step Functions はデータ連携 Lambda を非同期で呼び、関数は S3・BigQuery・Cuenote FC へ書いてから、ハートビートと SendTaskSuccess をタスクトークンで返す。実行は SUCCEEDED で、通知はしない](images/sequences/normal.drawio.svg)
 
+#### 15 分を超える処理（`dev` のみ・LMI）
+
+`holdSeconds` を付けた実行。データ連携 Lambda は LMI で動き、Lambda の 15 分の上限を超えて待つ（09「[LMI（Lambda Managed Instances）](09-architecture-specification.md#lmilambda-managed-instances)」）。図の観測値は `dev` で確かめたもの（09「[`dev` での検証結果](09-architecture-specification.md#dev-での検証結果)」の「LMI」。#66）。`local` は LMI を使わないため、15 分を超えては待てない。
+
+![15 分を超える処理のシーケンス図。開発者が holdSeconds 960 で実行を始め、投入とメールの送信は正常系と同じ。Step Functions はデータ連携 Lambda を修飾子なしで非同期に呼び、LMI の公開版で動く。関数は MySQL スタブから取得して S3・BigQuery・Cuenote FC へ書き、holdSeconds の間ハートビートを送り続ける。待つ間に 3 台中 2 台のインスタンスが終了しても途切れず、SendTaskSuccess を返して SUCCEEDED になる。dev で実行 16 分 2.6 秒・関数 961.9 秒だった](images/sequences/long-run-lmi.drawio.svg)
+
+#### 一時的なエラーを `Retry` で吸収する
+
+Lambda の呼び出しが一時的なエラーで失敗しても、`Retry` でやり直して成功すれば、実行は正常系と同じく `SUCCEEDED` になる（04「[リトライ](04-non-functional-specification.md#リトライ)」）。図は投入タスクで描いたが、`DataSync` タスクにも同じ `Retry` が付く。対象のエラーは CDK の定義で固定し、UT（08 #55）で確かめている。一時的なエラーは注入できないため、実行時の動きは観測していない。
+
+![一時的なエラーを Retry で吸収するシーケンス図。Step Functions が投入 Lambda を呼び、Lambda.TooManyRequestsException などの一時的なエラーが返る。Retry の対象なので待ってから呼び直し、2 回目は MySQL スタブから取得して SQS FIFO へ積み、件数を返す。前の呼び出しで積めていた分は重複排除 ID により 5 分以内なら重複しない。以降は正常系と同じく SUCCEEDED。Retry を使い切ると FAILED になり、Slack へ通知される。実行時の動きは未観測](images/sequences/retry-transient.drawio.svg)
+
 ### 実行の失敗
 
 実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、状態変化イベントが EventBridge rule を経て Slack 通知 Lambda に届く（02「F-5」）。メールの送信の失敗だけは Step Functions の外で起き、通知されない。
