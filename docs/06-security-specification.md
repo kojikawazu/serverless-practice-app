@@ -26,7 +26,7 @@
 
 IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する（09「IaC の責務分担」）。CDK の `grant*` がポリシーを足せないため、**必要な権限はすべて Terraform 側で明示する**。
 
-リソースの ARN は命名規約 `serverless-practice-app-<stage>-<name>`（10「命名」）で固定し、まだ存在しない CDK 側のリソースは接頭辞のワイルドカードで指定する。
+リソースの ARN は命名規約 `serverless-practice-app-<stage>-<name>`（10「命名」）で固定し、まだ存在しない CDK 側のリソースも、この名前から組み立てた ARN で指定する（接頭辞のワイルドカードは使わない。09「[IaC の責務分担](09-architecture-specification.md#iac-の責務分担)」）。
 
 | ロール | 引き受ける主体 | 許可する操作 | 対象 |
 |---|---|---|---|
