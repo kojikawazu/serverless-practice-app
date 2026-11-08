@@ -113,6 +113,7 @@ ARN の末尾に付ける `:1`・`:prod`・`:$LATEST` を**修飾子**（API の
 非同期の呼び出しもイベントソースマッピングも、配信は**少なくとも 1 回**で、エラーが無くても同じイベントが重複して届くことがある（公式）。公式は関数を冪等に作ることを強く勧めている。
 
 - 投入 Lambda: 重複排除 ID を `<実行名>:<配信対象 ID>` で決定的に作り、同じ実行が再投入されても FIFO が重複を除く（03「[投入 Lambda](../03-functional-specification.md#投入-lambdaenqueue)」）
+- Consumer Lambda: 送る前後に送信記録（DynamoDB）を書き、同じメールが再び届いても送り直さない。送ったかどうか判定できないときは送らずに失敗させ、DLQ へ移す（03「[Consumer Lambda](../03-functional-specification.md#consumer-lambdaconsumer)」・#136）
 - データ連携 Lambda: 非同期の再試行は 0 にしているが、それとは別の重複の配信を防ぐ仕組みは持っていない（コードで確認。重複したときの動きは確かめていない）
 
 ### 15 分の上限

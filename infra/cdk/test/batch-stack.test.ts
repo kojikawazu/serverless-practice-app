@@ -151,13 +151,24 @@ describe("BatchStack（local）", () => {
       },
     );
 
-    it("環境変数で、投入にはキュー URL、データ連携にはバケット名を SSM から渡す", () => {
+    it("環境変数で、投入にはキュー URL、Consumer には送信記録のテーブル名、データ連携にはバケット名を SSM から渡す", () => {
       template.hasResourceProperties("AWS::Lambda::Function", {
         FunctionName: "serverless-practice-app-local-enqueue",
         Environment: {
           Variables: Match.objectLike({
             STAGE: "local",
             QUEUE_URL: ssmRef(json, "/serverless-practice-app/local/queue/url"),
+          }),
+        },
+      });
+      template.hasResourceProperties("AWS::Lambda::Function", {
+        FunctionName: "serverless-practice-app-local-consumer",
+        Environment: {
+          Variables: Match.objectLike({
+            SEND_RECORDS_TABLE: ssmRef(
+              json,
+              "/serverless-practice-app/local/send-records/name",
+            ),
           }),
         },
       });
@@ -655,11 +666,11 @@ describe("BatchStack（dev）", () => {
     const defaults = Object.values(devJson.Parameters).flatMap((p) =>
       p.Default === undefined ? [] : [p.Default],
     );
-    // local の 14 個（Scheduler の DLQ の ARN・名前、メール送信キューの DLQ の名前を含む）に、
-    // LMI のキャパシティプロバイダの ARN を足した 15 個
+    // local の 15 個（Scheduler の DLQ の ARN・名前、メール送信キューの DLQ の名前、送信記録のテーブル名を含む）に、
+    // LMI のキャパシティプロバイダの ARN を足した 16 個
     expect(
       defaults.filter((name) => name.startsWith("/serverless-practice-app/")),
-    ).toHaveLength(15);
+    ).toHaveLength(16);
     expect(defaults.filter((name) => name.includes("/local/"))).toEqual([]);
   });
 

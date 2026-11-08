@@ -102,11 +102,12 @@ Lambda の関数の ARN には、修飾子（版・エイリアス）の付か�
 | ステートマシン → 投入・データ連携 Lambda（`InvokeFunction`） | ステートマシンのロール（ID ベース） |
 | 投入 Lambda → メール送信キュー | 投入 Lambda のロール（ID ベース） |
 | Consumer のイベントソースマッピング → メール送信キュー（受信・削除） | Consumer Lambda のロール（ID ベース）。キュー側のポリシーは置かない |
+| Consumer Lambda → 送信記録のテーブル（DynamoDB の読み書き。#136） | Consumer Lambda のロール（ID ベース）。テーブル側のポリシーは置かない |
 | データ連携 Lambda → S3・ステートマシン（`SendTask*`） | データ連携 Lambda のロール（ID ベース）。S3 側のバケットポリシーは HTTPS 以外を拒否するだけ |
 | 各 Lambda → 自分のロググループ | 各 Lambda のロール（ID ベース） |
-| EventBridge のルール 3 つ → Slack 通知 Lambda | Slack 通知 Lambda のリソースベースのポリシー（ルールごとに 1 つ） |
+| EventBridge のルール 4 つ → Slack 通知 Lambda | Slack 通知 Lambda のリソースベースのポリシー（ルールごとに 1 つ） |
 
-ロールごとの許可する操作と対象の一覧は、06「[認可（権限制御）](../06-security-specification.md#認可権限制御)」が正本。ロールはすべて Terraform が作り、CDK は作らない（09「[IaC の責務分担](../09-architecture-specification.md#iac-の責務分担)」）。リソースベースのポリシーのうち、Lambda の 3 つは CDK がルールのターゲットを設定するときに付け、S3 のバケットポリシーは Terraform が付ける。
+ロールごとの許可する操作と対象の一覧は、06「[認可（権限制御）](../06-security-specification.md#認可権限制御)」が正本。ロールはすべて Terraform が作り、CDK は作らない（09「[IaC の責務分担](../09-architecture-specification.md#iac-の責務分担)」）。リソースベースのポリシーのうち、Lambda の 4 つは CDK がルールのターゲットを設定するときに付け、S3 のバケットポリシーは Terraform が付ける。
 
 ## 特徴と制約
 

@@ -25,6 +25,7 @@
 | ステートマシン | 投入 Lambda `enqueue` | 同期呼び出し（`lambda:invoke` 統合） | タスク入力 |
 | 投入 Lambda | メール送信キュー | `SendMessageBatch` | MailMessage |
 | メール送信キュー | Consumer Lambda `consumer` | イベントソースマッピング | SQS イベント |
+| Consumer Lambda | 送信記録のテーブル（DynamoDB） | `PutItem`（条件付き）/ `GetItem`（強い整合性）/ `UpdateItem` / `DeleteItem`（条件付き） | 送信記録（05「送信記録」。#136） |
 | ステートマシン | データ連携 Lambda `data-sync` | 非同期呼び出し（`lambda:invoke.waitForTaskToken` 統合、`InvocationType: "Event"`） | タスク入力 + タスクトークン |
 | データ連携 Lambda | ステートマシン | `SendTaskSuccess` / `SendTaskFailure` / `SendTaskHeartbeat` | データ連携 Lambda の出力・エラー |
 | Scheduler | Scheduler の DLQ（SQS 標準キュー） | Scheduler が送る（`DeadLetterConfig`） | 起動に失敗した呼び出し（下記「Scheduler の DLQ のメッセージ」） |
@@ -94,11 +95,11 @@
   "recipientId": "r-001",
   "email": "user1@example.com",
   "subject": "serverless-practice-app デモ配信",
-  "simulateFailure": false
+  "simulateFailure": "none"
 }
 ```
 
-属性（`MessageGroupId` / `MessageDeduplicationId`）は 05「メールメッセージ」を参照。
+属性（`MessageGroupId` / `MessageDeduplicationId`）と `simulateFailure` の値（`none` / `beforeSend` / `afterSend`）は 05「メールメッセージ」を参照。
 
 ### Consumer Lambda の出力（部分バッチ応答）
 
@@ -239,4 +240,4 @@ Scheduler が、起動に失敗した呼び出しを送る。このデモのコ�
 | `States.Timeout`（`DataSync`） | `DataSync` タスクがタイムアウトを超えた（04「パフォーマンス要件」）。データ連携 Lambda が結果もハートビートも 300 秒返さなかった（結果を返せずに終えた・落ちた）ときも、この名前になる。`States.HeartbeatTimeout` ではない（LocalStack で観測。実 AWS は未観測。09「LocalStack での検証結果」） | しない | `FAILED` |
 | `States.Timeout`（実行全体） | ステートマシンが 40 分を超えた | — | `TIMED_OUT`。この名前は実行履歴の `ExecutionTimedOut` イベントにだけ出る。実 AWS では実行（`describe-execution`）に `error` / `cause` の項目が無く、通知にも値が届かない（09「`dev` での検証結果」）。LocalStack では実行の `error` が `null` で、この名前は出ない（09「LocalStack での検証結果」） |
 
-Consumer Lambda はエラーを投げず、失敗したメッセージを `batchItemFailures` で返す。Slack 通知 Lambda は対象外のイベントでもエラーを投げない（04「エラーハンドリング・堅牢性」）。
+Consumer Lambda はエラーを投げず、失敗したメッセージを `batchItemFailures` で返す。1 件ごとの失敗はエラーログのエラー名（`errorName`）で見分ける。上の表の `ValidationError`・`InjectedFailureError` のほかに、送信中の記録が残っていて送ったかどうか判定できない `SendStateUnknownError` がある（送らずに失敗させ、最大受信回数で DLQ へ移す。03「Consumer Lambda」・#136）。Slack 通知 Lambda は対象外のイベントでもエラーを投げない（04「エラーハンドリング・堅牢性」）。

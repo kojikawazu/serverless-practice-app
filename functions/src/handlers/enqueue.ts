@@ -3,11 +3,12 @@ import type { SendMessageBatchRequestEntry } from "@aws-sdk/client-sqs";
 import { EnqueuePartialFailureError } from "../errors/enqueue-partial-failure-error";
 import { InjectedFailureError } from "../errors/injected-failure-error";
 import { loadHandlerContext } from "../lib/handler-context";
+import { messageKeyOf } from "../lib/message-key";
 import { parseInput } from "../lib/parse";
 import { enqueueEnvSchema } from "../schemas/env";
 import { taskInputSchema } from "../schemas/execution";
-import type { TaskInput } from "../schemas/execution";
-import type { MailMessage } from "../schemas/mail-message";
+import type { FailAt, TaskInput } from "../schemas/execution";
+import type { MailMessage, SimulateFailure } from "../schemas/mail-message";
 import { MySqlStub } from "../stubs/mysql-stub";
 import type { Logger } from "../types/logger";
 import type { RecipientRepository } from "../types/recipient";
@@ -17,6 +18,22 @@ const SEND_BATCH_LIMIT = 10;
 
 /** メールの件名。デモでは固定文言（docs/05「メールメッセージ」） */
 const MAIL_SUBJECT = "serverless-practice-app デモ配信";
+
+/**
+ * 実行入力の `failAt` から、Consumer に注入する失敗の箇所を決める（docs/05「メールメッセージ」）。
+ *
+ * @param failAt - 実行入力の失敗の注入箇所。省略時は `undefined`
+ * @returns メッセージ本文の `simulateFailure`。Consumer 以外の箇所なら `"none"`
+ */
+function toSimulateFailure(failAt: FailAt | undefined): SimulateFailure {
+  if (failAt === "consumer") {
+    return "beforeSend";
+  }
+  if (failAt === "consumerAfterSend") {
+    return "afterSend";
+  }
+  return "none";
+}
 
 /**
  * 投入 Lambda の依存。Lambda の入口では本物を組み立て、テストでは SQS 以外も本物を渡す。
@@ -109,7 +126,7 @@ async function sendMessages(
       recipientId: recipient.recipientId,
       email: recipient.email,
       subject: MAIL_SUBJECT,
-      simulateFailure: failAt === "consumer",
+      simulateFailure: toSimulateFailure(failAt),
     };
     return {
       // バッチ内の識別子。失敗時にどの配信対象が送れなかったかを示せるよう配信対象 ID を使う
@@ -117,7 +134,10 @@ async function sendMessages(
       MessageBody: JSON.stringify(message),
       // 順序が要るのは同じ宛先の中だけのため、宛先ごとにグループを分ける（docs/05）
       MessageGroupId: recipient.recipientId,
-      MessageDeduplicationId: `${executionName}:${recipient.recipientId}`,
+      MessageDeduplicationId: messageKeyOf(
+        executionName,
+        recipient.recipientId,
+      ),
     };
   });
 

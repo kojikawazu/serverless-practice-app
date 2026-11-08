@@ -3,6 +3,7 @@ import { MySqlStub } from "../../functions/src/stubs/mysql-stub";
 import {
   abortExecution,
   findExportKeys,
+  findSkippedMessageKeys,
   findStubLogs,
   findTaskTimedOutEvents,
   pollUntil,
@@ -19,7 +20,7 @@ import {
 } from "./helpers/localstack";
 import type { DeployedResources } from "./helpers/localstack";
 
-// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27・#32・#54）。
+// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27・#32・#54・#80）。
 // 前提: scripts/localstack.sh up → scripts/stack.sh local up
 //
 // ケースは順番に実行する（concurrent を付けない。同じファイルのテストは既定で順番に走る）。
@@ -36,6 +37,9 @@ const LOG_TIMEOUT_MS = 60_000;
 
 /** DLQ へ移るまで待つ最大時間（ミリ秒）。可視性タイムアウト 60 秒 × 受信 3 回に、余裕を足す（docs/04「リトライ」） */
 const DLQ_TIMEOUT_MS = 330_000;
+
+/** 送った直後の失敗の後、再配信で送信済みとして飛ばすまで待つ最大時間（ミリ秒）。可視性タイムアウト 60 秒に余裕を足す（docs/04「リトライ」） */
+const REDELIVERY_TIMEOUT_MS = 180_000;
 
 /** IT の 1 回の実行を区別する接頭辞。前回の IT や手動実行のログ・ファイルと混ざらないよう、確認はすべて実行名で絞り込む */
 const RUN_ID = `it-${Date.now().toString(36)}`;
@@ -260,6 +264,29 @@ describe("バッチの実行（LocalStack）", () => {
       }),
     ]);
   });
+
+  // 再配信まで可視性タイムアウトの間グループが止まるため、他のケースの後・consumer のケースの前に置く
+  it('failAt: "consumerAfterSend": SUCCEEDED になり、送った直後の失敗で再配信されても、メールは配信対象ごとに 1 通だけ送られる（#136）', async () => {
+    const name = `${RUN_ID}-after-send`;
+
+    const execution = await runExecution(resources.stateMachineArn, name, {
+      failAt: "consumerAfterSend",
+    });
+
+    expect(execution.status).toBe("SUCCEEDED");
+    // 1 回目の受信で送って送信済みを記録してから失敗し、可視性タイムアウトの後の再配信で、送らずに成功する
+    const skipped = await pollUntil(
+      () => findSkippedMessageKeys(name),
+      (keys) => keys.length >= recipientIds.length,
+      REDELIVERY_TIMEOUT_MS,
+      10_000,
+    );
+    expect(skipped.sort()).toEqual(recipientIds.map((id) => `${name}:${id}`));
+    await sleep(ABSENCE_GRACE_MS);
+    const sent = await findStubLogs("consumer", name, "sendgrid");
+    expect(sent.map((log) => log.recipientId).sort()).toEqual(recipientIds);
+    expect(await receiveRecipientIds(resources.dlqUrl, name)).toEqual([]);
+  }, 300_000);
 
   // 他のケースのメッセージを巻き込まないよう最後に置く（ファイル先頭のコメント）
   it('failAt: "consumer": SUCCEEDED のまま、配信対象の件数のメッセージが DLQ へ移り、実行の失敗としては Slack スタブに出ない', async () => {

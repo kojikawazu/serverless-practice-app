@@ -31,7 +31,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | ロール | 引き受ける主体 | 許可する操作 | 対象 |
 |---|---|---|---|
 | 投入 Lambda | Lambda | `sqs:SendMessage` | メール送信キュー |
-| Consumer Lambda | Lambda | `sqs:ReceiveMessage` / `sqs:DeleteMessage` / `sqs:GetQueueAttributes` | メール送信キュー |
+| Consumer Lambda | Lambda | `sqs:ReceiveMessage` / `sqs:DeleteMessage` / `sqs:GetQueueAttributes` / `dynamodb:PutItem` / `dynamodb:GetItem` / `dynamodb:UpdateItem` / `dynamodb:DeleteItem` | メール送信キュー / 送信記録のテーブル（同じメールを送り直さないため。#136。テーブルの作成・削除の権限は持たない） |
 | データ連携 Lambda | Lambda | `s3:PutObject` / `states:SendTaskSuccess` / `states:SendTaskFailure` / `states:SendTaskHeartbeat` | 出力先バケットの `exports/*` / ステートマシン `serverless-practice-app-<stage>-batch`（タスクトークンで結果を返すため） |
 | Slack 通知 Lambda | Lambda | なし（ログ出力のみ） | — |
 | ステートマシン | Step Functions | `lambda:InvokeFunction` | `serverless-practice-app-<stage>-enqueue` / `-data-sync`（`:*` のバージョン・エイリアスを含む） |
@@ -58,7 +58,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | SQS メッセージ本文 | JSON として読め、05「メールメッセージ」の全フィールドを持つ。`email` はメールアドレス形式 | その 1 件を失敗として返す（3 回で DLQ） |
 | EventBridge イベント | `detail-type` が `Step Functions Execution Status Change`、`detail.status` が通知対象の 3 状態のいずれか | 警告ログを出して正常終了する |
 
-`executionName` は S3 のキーと SQS の重複排除 ID に入るため、文字を制限してキーの区切り（`/`）を含ませない。
+`executionName` は S3 のキーと SQS の重複排除 ID（送信記録のキーも同じ値）に入るため、文字を制限してキーの区切り（`/`）を含ませない。
 
 ## データ保護
 
@@ -68,6 +68,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | 秘匿値 | `LOCALSTACK_AUTH_TOKEN` のみ。手元の `.env`（Git 管理外）に置き、変数名だけを `.env.example` で共有する。CI ではリポジトリのシークレットから `it` ジョブの LocalStack を起動するステップにだけ渡す（08）。シークレットは Actions 用と Dependabot 用の 2 か所に同じ値を置く（09「LocalStack の認証」）。fork からの PR には渡らない（09「CI とマージの条件」）。ほかに持つことになったら `dev` は Secrets Manager、手元は `.env` に置く（`security.md`） |
 | S3 バケット | パブリックアクセスを全面ブロック。SSE-S3 で暗号化。バケットポリシーで HTTPS 以外のアクセスを拒否（`aws:SecureTransport`） |
 | SQS キュー・DLQ | SQS 管理の鍵で暗号化（SSE-SQS） |
+| 送信記録（DynamoDB） | メールのキー（実行名・配信対象 ID）と状態だけを持ち、宛先メールアドレス・本文は持たない（05「送信記録」）。暗号化は DynamoDB の既定（AWS 所有の鍵）のまま。7 日の TTL で消える |
 | 予算アラートの通知先 | メールアドレス（個人情報）は `.env`（Git 管理外）の `BUDGET_ALERT_EMAIL` にだけ置き、`.env.example` には変数名だけを置く。スクリプトはその 1 行だけを読み（`.env` を source しない）、画面には先頭の 1 文字とドメインだけを出す（09「予算アラート」） |
 | Terraform の state | 09「Terraform の state」と `iac.md` に従う。秘匿値を含まないが、バケットはバージョニング有効・公開禁止 |
 

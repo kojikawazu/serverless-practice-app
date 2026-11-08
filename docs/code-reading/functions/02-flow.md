@@ -42,12 +42,12 @@ sequenceDiagram
 
 ### ステップ詳細
 
-1. `functions/src/handlers/enqueue.ts:155` — 環境変数（`STAGE`・`QUEUE_URL`）を検証し、ロガーを作る。不正なら `ValidationError` を投げる
-2. `functions/src/handlers/enqueue.ts:76` — タスク入力を `taskInputSchema`（未知のキーを拒否）で検証する。検証に通ったら、以降のログに `executionName` を付ける（`:77`）
-3. `functions/src/handlers/enqueue.ts:101` — `failAt` が `enqueue` なら、キューへ何も積まずに失敗する
-4. `functions/src/handlers/enqueue.ts:106` — 配信対象ごとにメッセージを作る。`failAt` が `consumer` なら `simulateFailure: true` を本文に入れ、Consumer 側で失敗させる
-5. `functions/src/handlers/enqueue.ts:125` — 10 件（`SendMessageBatch` の上限）ずつ送る。**一部が失敗しても残りのバッチは送り切り**、最後にまとめて `EnqueuePartialFailureError` を投げる（`:134`）
-6. `functions/src/handlers/enqueue.ts:79` — どこで失敗しても、エラーログを 1 行出してから投げ直す
+1. `functions/src/handlers/enqueue.ts:175` — 環境変数（`STAGE`・`QUEUE_URL`）を検証し、ロガーを作る。不正なら `ValidationError` を投げる
+2. `functions/src/handlers/enqueue.ts:93` — タスク入力を `taskInputSchema`（未知のキーを拒否）で検証する。検証に通ったら、以降のログに `executionName` を付ける（`:94`）
+3. `functions/src/handlers/enqueue.ts:118` — `failAt` が `enqueue` なら、キューへ何も積まずに失敗する
+4. `functions/src/handlers/enqueue.ts:123` — 配信対象ごとにメッセージを作る。`failAt` が `consumer` なら `simulateFailure: "beforeSend"`、`consumerAfterSend` なら `"afterSend"` を本文に入れ（`toSimulateFailure`。`:28`）、Consumer 側で失敗させる。重複排除 ID は `messageKeyOf`（`lib/message-key.ts:10`）で作る
+5. `functions/src/handlers/enqueue.ts:145` — 10 件（`SendMessageBatch` の上限）ずつ送る。**一部が失敗しても残りのバッチは送り切り**、最後にまとめて `EnqueuePartialFailureError` を投げる（`:154`）
+6. `functions/src/handlers/enqueue.ts:96` — どこで失敗しても、エラーログを 1 行出してから投げ直す
 
 重複排除 ID が `<実行名>:<配信対象 ID>` で決まっているため、`Retry` で同じ実行が再投入されても、5 分以内なら FIFO が重複を除く（03「[投入 Lambda](../../03-functional-specification.md#投入-lambdaenqueue)」）。
 
@@ -60,6 +60,7 @@ sequenceDiagram
     participant Q as SQS FIFO
     participant H as handler
     participant C as consume
+    participant R as 送信記録（DynamoDB）
     participant M as SendGridStub
     Q->>H: SQS イベント（Records）
     H->>C: consume(event, deps)
@@ -69,10 +70,18 @@ sequenceDiagram
             C->>C: 送らずに batchItemFailures へ
         else
             C->>C: JSON.parse と mailMessageSchema で本文を検証
-            alt simulateFailure が true
+            alt simulateFailure が beforeSend
                 C->>C: InjectedFailureError を捕まえて batchItemFailures へ、グループを失敗済みにする
             else
-                C->>M: send(mail)
+                C->>R: begin（キーが無ければ送信中を書く）
+                alt 送信済み
+                    C->>C: 送らずに成功
+                else 送信中が残っている
+                    C->>C: SendStateUnknownError で batchItemFailures へ
+                else 書けた
+                    C->>M: send(mail)
+                    C->>R: markSent（送信済みにする）
+                end
             end
         end
     end
@@ -81,10 +90,12 @@ sequenceDiagram
 
 ### ステップ詳細
 
-1. `functions/src/handlers/consumer.ts:69` — イベント全体を検証する。ここで失敗したときだけ例外を投げ、バッチ全体が再配信される
-2. `functions/src/handlers/consumer.ts:74` — レコードのメッセージグループ ID が、既に失敗したグループなら送らずに失敗として返す。送ると、再配信された前のメッセージが後から届き、グループ内の順序が逆転するため
-3. `functions/src/handlers/consumer.ts:37` — 本文を `JSON.parse` してから `mailMessageSchema` で検証する。JSON として読めない（`SyntaxError`）・形が違う（`ValidationError`）・注入された失敗（`InjectedFailureError`）は、どれも `:86` で捕まえて、そのメッセージだけを失敗にする
-4. `functions/src/handlers/consumer.ts:45` — 送信内容（`OutgoingMail`）に詰め替えて SendGrid スタブへ渡す。`simulateFailure` などキュー側の項目は渡さない
+1. `functions/src/handlers/consumer.ts:125` — イベント全体を検証する。ここで失敗したときだけ例外を投げ、バッチ全体が再配信される
+2. `functions/src/handlers/consumer.ts:130` — レコードのメッセージグループ ID が、既に失敗したグループなら送らずに失敗として返す。送ると、再配信された前のメッセージが後から届き、グループ内の順序が逆転するため
+3. `functions/src/handlers/consumer.ts:49` — 本文を `JSON.parse` してから `mailMessageSchema` で検証する。JSON として読めない（`SyntaxError`）・形が違う（`ValidationError`）・注入された失敗（`InjectedFailureError`）・判定不能（`SendStateUnknownError`）は、どれも `consume` の `catch` で捕まえて、そのメッセージだけを失敗にする
+4. `functions/src/handlers/consumer.ts:59` — 送信記録に、キー（`<実行名>:<配信対象 ID>`）が無いことを条件に「送信中」を書く。送信済みなら送らずに成功、送信中が残っていれば送ったかどうか判定できないため送らずに失敗にする（二重送信より DLQ で人に知らせる側に倒す。#136）
+5. `functions/src/handlers/consumer.ts:72` — 送信内容（`OutgoingMail`）に詰め替えて SendGrid スタブへ渡す。`simulateFailure` などキュー側の項目は渡さない。送れなかったら「送信中」を消す（`releaseQuietly`。`:98`）
+6. `functions/src/handlers/consumer.ts:84` — 送信済みにする。`simulateFailure` が `afterSend` なら、その後で失敗する（`:86`。送った直後に落ちたことの再現）
 
 失敗したメッセージは受信 3 回で DLQ へ移り、Step Functions の実行の成否には影響しない（[SQS FIFO 解説](../../guides/sqs-fifo.md#consumer-の失敗は実行の成否に乗らない)）。
 

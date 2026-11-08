@@ -1,20 +1,27 @@
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import type { SQSBatchResponse } from "aws-lambda";
 import { InjectedFailureError } from "../errors/injected-failure-error";
+import { SendStateUnknownError } from "../errors/send-state-unknown-error";
 import { loadHandlerContext } from "../lib/handler-context";
+import { messageKeyOf } from "../lib/message-key";
 import { parseInput } from "../lib/parse";
-import { baseEnvSchema } from "../schemas/env";
+import { DynamoDbSendRecordStore } from "../repositories/send-record-repository";
+import { consumerEnvSchema } from "../schemas/env";
 import { mailMessageSchema } from "../schemas/mail-message";
 import { sqsEventSchema } from "../schemas/sqs-event";
 import type { SqsEvent } from "../schemas/sqs-event";
 import { SendGridStub } from "../stubs/sendgrid-stub";
 import type { Logger } from "../types/logger";
 import type { MailSender } from "../types/mail";
+import type { SendRecordStore } from "../types/send-record";
 
 /**
  * Consumer Lambda の依存。Lambda の入口では本物のスタブを組み立てる。
  */
 export type ConsumerDeps = {
   mailSender: MailSender;
+  /** 送信記録。同じメールを送り直さないために使う（#136） */
+  sendRecords: SendRecordStore;
   logger: Logger;
 };
 
@@ -22,13 +29,18 @@ export type ConsumerDeps = {
 type SqsRecord = SqsEvent["Records"][number];
 
 /**
- * メッセージ 1 件を検証して送る。
+ * メッセージ 1 件を検証し、まだ送っていなければ送る（docs/03「Consumer Lambda」）。
+ *
+ * 送る前に送信記録へ「送信中」を書き、送った後に「送信済み」にする。再配信で「送信済み」を見つけたら送らずに成功とし、
+ * 「送信中」が残っていたら送ったかどうか判定できないため、送らずに失敗にする（二重送信より、DLQ で人に知らせる側に倒す）。
  *
  * @param record - SQS イベントの 1 件
  * @param deps - 依存
  * @throws {SyntaxError} 本文が JSON として読めない場合
  * @throws {ValidationError} 本文がメールメッセージのスキーマに合わない場合
- * @throws {InjectedFailureError} `simulateFailure` が `true` の場合
+ * @throws {InjectedFailureError} `simulateFailure` が `"beforeSend"` か `"afterSend"` の場合
+ * @throws {SendStateUnknownError} 送信中の記録が残っていた場合
+ * @throws {Error} 送信・送信記録の読み書きが失敗した場合
  */
 async function processRecord(
   record: SqsRecord,
@@ -39,15 +51,59 @@ async function processRecord(
     JSON.parse(record.body),
     "メッセージ本文",
   );
-  if (message.simulateFailure) {
+  if (message.simulateFailure === "beforeSend") {
     throw new InjectedFailureError("consumer");
   }
-  await deps.mailSender.send({
-    executionName: message.executionName,
-    recipientId: message.recipientId,
-    to: message.email,
-    subject: message.subject,
-  });
+
+  const messageKey = messageKeyOf(message.executionName, message.recipientId);
+  const begun = await deps.sendRecords.begin(messageKey);
+  if (begun === "sent") {
+    deps.logger.info("送信済みのため送りません", {
+      messageId: record.messageId,
+      messageKey,
+    });
+    return;
+  }
+  if (begun === "unknown") {
+    throw new SendStateUnknownError(messageKey);
+  }
+
+  try {
+    await deps.mailSender.send({
+      executionName: message.executionName,
+      recipientId: message.recipientId,
+      to: message.email,
+      subject: message.subject,
+    });
+  } catch (error) {
+    // 送れなかったので「送信中」を消し、次の受信で送り直せるようにする
+    await releaseQuietly(messageKey, deps);
+    throw error;
+  }
+  // ここで落ちると「送信中」が残り、次の受信は判定不能として DLQ へ向かう（送り直さない）
+  await deps.sendRecords.markSent(messageKey);
+
+  if (message.simulateFailure === "afterSend") {
+    throw new InjectedFailureError("consumerAfterSend");
+  }
+}
+
+/**
+ * 「送信中」の記録を消す。消せなかったときはエラーログを出すだけで、元の失敗を隠さない。
+ * 消せずに「送信中」が残ると、次の受信は判定不能として送らずに失敗する（送れていないメールは DLQ で人に知らせる）。
+ *
+ * @param messageKey - メールのキー
+ * @param deps - 依存
+ */
+async function releaseQuietly(
+  messageKey: string,
+  deps: ConsumerDeps,
+): Promise<void> {
+  try {
+    await deps.sendRecords.release(messageKey);
+  } catch (error) {
+    deps.logger.error("送信中の記録を消せませんでした", error, { messageKey });
+  }
 }
 
 /**
@@ -106,6 +162,13 @@ export async function consume(
  * @throws {ValidationError} 環境変数またはイベントの形式が不正な場合
  */
 export async function handler(event: unknown): Promise<SQSBatchResponse> {
-  const { logger } = loadHandlerContext("consumer", baseEnvSchema);
-  return await consume(event, { mailSender: new SendGridStub(logger), logger });
+  const { env, logger } = loadHandlerContext("consumer", consumerEnvSchema);
+  return await consume(event, {
+    mailSender: new SendGridStub(logger),
+    sendRecords: new DynamoDbSendRecordStore(dynamodb, env.SEND_RECORDS_TABLE),
+    logger,
+  });
 }
+
+/** DynamoDB クライアント。実行環境の再利用（ウォームスタート）時に接続を使い回すため、モジュールで 1 つ持つ */
+const dynamodb = new DynamoDBClient({});

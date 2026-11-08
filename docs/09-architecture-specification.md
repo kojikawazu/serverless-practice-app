@@ -39,13 +39,14 @@
 │   ├── src/
 │   │   ├── handlers/     # enqueue / consumer / data-sync / notify-slack
 │   │   ├── stubs/        # 外部サービスのスタブ
+│   │   ├── repositories/ # 実物の AWS サービスを読み書きする口の実装（送信記録の DynamoDB）
 │   │   ├── schemas/      # 入力の Zod スキーマ（型は z.infer で導出）
 │   │   ├── errors/       # エラークラス（name が Step Functions との契約）
 │   │   ├── types/        # 複数ファイルで使う型と、スタブが実装する口（interface）
 │   │   └── lib/          # 入力検証・構造化ロガーなどの共通処理
 │   └── test/
 ├── infra/
-│   ├── terraform/        # 土台（IAM・SQS・S3・Schedule group・SSM 出力。dev だけ LMI の VPC・キャパシティプロバイダ）
+│   ├── terraform/        # 土台（IAM・SQS・S3・DynamoDB・Schedule group・SSM 出力。dev だけ LMI の VPC・キャパシティプロバイダ）
 │   │   └── envs/         # <stage>.tfvars（変数）/ <stage>.s3.tfbackend（state のキー）。秘匿値は置かない
 │   └── cdk/              # アプリ（Lambda・Step Functions・Schedule・EventBridge rule）。bin/（入口）・lib/（スタック）・test/
 ├── scripts/              # 検査・デプロイ補助スクリプト
@@ -62,6 +63,7 @@
 | SQS FIFO + DLQ | Terraform | `maxReceiveCount: 3`。可視性タイムアウトは Consumer のタイムアウトの 6 倍 |
 | Scheduler の DLQ（SQS 標準キュー） | Terraform | 起動に失敗した呼び出しを受ける（04「リトライ」・#101）。Scheduler は FIFO を DLQ に使えない |
 | S3 バケット（データ連携の出力先） | Terraform | 元資料の表に無いが、状態を持つ土台として Terraform に置く |
+| DynamoDB テーブル（送信記録） | Terraform | 元資料の表に無い（改善提案 3 の状態保存先）。状態を持つ土台として、S3 と同じく Terraform に置く（下記「送信記録の保存先」・#136） |
 | Schedule group | Terraform | |
 | LMI の VPC・キャパシティプロバイダ | Terraform | `dev` だけ作る。関数の紐付けは CDK（「LMI」の「IaC の責務」） |
 | SSM パラメータ | Terraform | 上記の ARN・名前・URL を `/serverless-practice-app/<stage>/...` に書き出す |
@@ -95,8 +97,25 @@ handler はスタブを直接 import せず、インターフェース経由で�
 | `MailSender` | メールを 1 通送る | `SendGridStub` |
 | `FailureNotifier` | 実行の失敗を知らせる | `SlackStub` |
 | `ExportWriter` | 配信対象の全件を書き出す | `BigQueryStub` / `CuenoteFcStub` |
+| `SendRecordStore` | メールの送信記録を読み書きする | スタブではなく実物の DynamoDB（`functions/src/repositories/` の `DynamoDbSendRecordStore`。#136） |
 
 BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（全件を書く）が同じため、1 つのインターフェースにまとめる。失敗の流れ（① 失敗通知・DLQ 行き）を試せるよう、Step Functions の実行入力で失敗を注入できるようにする（例: `{"failAt": "dataSync"}`）。
+
+### 送信記録の保存先
+
+Consumer が二重送信を防ぐための送信記録（05「送信記録」・03「Consumer Lambda」）は、**DynamoDB のオンデマンドのテーブル**に置く（#136。2026-11-08 に判断）。
+
+| 候補 | 置いておく料金 | 条件付きの書き込み | 期限での削除 | 判断 |
+|---|---|---|---|---|
+| **DynamoDB（オンデマンド）** | かからない（読み書きの回数とデータ量だけ） | 条件式で「キーが無ければ書く」「状態が送信中なら消す」と書ける | TTL の属性で自動に消える（非同期） | **採用**。冪等性の記録の置き場として一般的な形で、`local` でも LocalStack で動く |
+| S3（既存の出力先バケットを流用） | かからない | `If-None-Match` で「無ければ書く」はできる。状態の更新・条件付きの削除は ETag の扱いが増える | ライフサイクルで日単位 | 見送り。送信中 → 送信済みの更新と、送信中のときだけ消す操作が DynamoDB より手間になる。LocalStack での条件付き書き込みも確かめていない |
+| ElastiCache・RDS など | かかる（常時起動） | — | — | 見送り。置いておくだけで課金され、01「制約・前提」の「常時課金のリソースを作らない」に反する |
+| Lambda の実行環境のメモリ | かからない | — | — | 見送り。実行環境をまたいで共有されず、再配信が別の実行環境に届くと効かない |
+
+- **作る側**: 状態を持つ土台なので、S3・SQS と同じく Terraform が作り、テーブル名を SSM（`send-records/name`）で CDK に渡す（「IaC の責務分担」）
+- **権限**: Consumer のロールに、このテーブルへの `PutItem` / `GetItem` / `UpdateItem` / `DeleteItem` だけを足す（06「認可」）
+- **Powertools の冪等性ユーティリティは使わない**: 送信中の記録が期限切れになると、送り直す前提で作られている。このデモは、送ったかどうか判定できないときは送り直さずに DLQ へ倒すため（03「Consumer Lambda」）、DynamoDB の呼び出し 4 種を自前で書いた
+- **料金**: オンデマンドの読み書きは、1 実行で配信対象の数 × 2〜3 回ほど。単価は確かめていないが、デモの実行量なら下記「費用」の従量課金の見込み（無料枠に収まる見込み）の範囲と考えている
 
 ### Step Functions の流れ
 
@@ -108,7 +127,7 @@ BigQuery と Cuenote FC は、データ連携 Lambda から見た振る舞い（
 
 ## システム構成図
 
-![システム構成図。Schedule が Step Functions を起動し、投入 Lambda → SQS FIFO → Consumer Lambda → SendGrid スタブと、データ連携 Lambda（非同期 + waitForTaskToken）→ S3・外部スタブの 2 系統が流れる。失敗は EventBridge rule → Slack 通知 Lambda → Slack スタブに集まり、Scheduler の起動の失敗（Scheduler の DLQ の送信数）、起動を試みなかった日（試行回数 0）、メールの送信の失敗（メール送信キューの DLQ のメッセージ数）は CloudWatch アラームを経て同じ rule に届く。枠の色は管理元（CDK / Terraform / スタブ）](images/architecture.drawio.svg)
+![システム構成図。Schedule が Step Functions を起動し、投入 Lambda → SQS FIFO → Consumer Lambda → SendGrid スタブ（Consumer は送る前後に DynamoDB の送信記録を書く）と、データ連携 Lambda（非同期 + waitForTaskToken）→ S3・外部スタブの 2 系統が流れる。失敗は EventBridge rule → Slack 通知 Lambda → Slack スタブに集まり、Scheduler の起動の失敗（Scheduler の DLQ の送信数）、起動を試みなかった日（試行回数 0）、メールの送信の失敗（メール送信キューの DLQ のメッセージ数）は CloudWatch アラームを経て同じ rule に届く。枠の色は管理元（CDK / Terraform / スタブ）](images/architecture.drawio.svg)
 
 図は [`images/architecture.drawio.svg`](images/architecture.drawio.svg) が正本で、draw.io の図のデータを SVG に埋め込んでいる。シーケンス図（[`images/sequences/`](images/sequences/)。03「処理の流れ」と本書「デプロイ」）も同じ形式で、以下の扱いは `docs/images/` のすべての図に共通する。draw.io（デスクトップ版・VS Code の拡張・Web 版）でそのまま開いて編集し、**同じ `.drawio.svg` のまま保存する**（PNG などへ書き出して別のファイルを置かない。元データと画像がずれるため）。上下左右の余白（40px）は、図の最背面に置いた透明でロックした枠（id `margin`）で作っている。この枠は消さず、図を広げたときはロックを外して枠も広げる（書き出しの余白の設定は図のデータに残らず、draw.io 32.5.5 の CLI の `-b` は右と下だけ 2 倍になるため使わない）。
 
@@ -121,6 +140,7 @@ Lambda の環境変数に秘匿値は無い（外部サービスはすべてス�
 | `STAGE` | ステージ名（`local` / `dev`） | 全 Lambda |
 | `QUEUE_URL` | メール送信キューの URL | 投入 Lambda |
 | `BUCKET_NAME` | データ連携の出力先バケット | データ連携 Lambda |
+| `SEND_RECORDS_TABLE` | 送信記録のテーブル名（05「送信記録」） | Consumer Lambda |
 
 LocalStack 上の Lambda から AWS API を呼ぶときのエンドポイントは、LocalStack が注入する設定に任せる。コード側でエンドポイントを分岐しない。
 
@@ -184,7 +204,7 @@ Terraform → CDK の順にデプロイし、削除はその逆（CDK → Terraf
 
 コマンドは `scripts/stack.sh <stage> up` / `down` の 1 本に固定している（スクリプトの冒頭が正本）。
 
-![デプロイのシーケンス図。stack.sh が Terraform の init と apply を呼び、Terraform は state バケットの state を読んでロックを取り、IAM ロール・SQS・S3・Schedule group・LMI（dev のみ）を作って ARN・名前・URL を SSM に書き出し、state を書いてロックを外す。続けて CDK の bootstrap と deploy を呼び、CDK は SSM の値を読まずにテンプレートを合成する。CloudFormation がデプロイ時に SSM の値を解決し、Lambda 4 種・ステートマシン・Schedule・アラーム 2 つ・rule 3 つを作る](images/sequences/deploy-up.drawio.svg)
+![デプロイのシーケンス図。stack.sh が Terraform の init と apply を呼び、Terraform は state バケットの state を読んでロックを取り、IAM ロール・SQS・S3・DynamoDB・Schedule group・LMI（dev のみ）を作って ARN・名前・URL を SSM に書き出し、state を書いてロックを外す。続けて CDK の bootstrap と deploy を呼び、CDK は SSM の値を読まずにテンプレートを合成する。CloudFormation がデプロイ時に SSM の値を解決し、Lambda 4 種・ステートマシン・Schedule・アラーム 3 つ・rule 4 つを作る](images/sequences/deploy-up.drawio.svg)
 
 ![削除のシーケンス図。stack.sh が先に CDK の destroy を呼び、CloudFormation がスタックのリソースを消す。続けて Terraform の init と destroy を呼び、Terraform は state を読んでロックを取り、土台のリソースと SSM パラメータを消して state を書く。消した後も state バケットと CDK のブートストラップは残る](images/sequences/deploy-down.drawio.svg)
 
@@ -230,7 +250,7 @@ backend は `s3` の 1 種類に統一し、置き場所をステージで分け
 
 - **NAT Gateway は作らない**: 外部接続はすべてスタブなので、Lambda から外部へ出る経路が要らない。NAT Gateway は時間課金のため、置くとデモを止めている間も費用がかかる。VPC は LMI のキャパシティプロバイダにサブネットが要るため `dev` だけに作り、パブリックサブネットと IGW の経路にする（VPC・サブネット・IGW は無料）
 - **LMI の EC2 は存在する間だけ課金される**: `dev` の検証の間だけ作り、確かめたら消す（「LMI」の「費用と消し忘れへの備え」）
-- 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM）で、デモの実行量なら無料枠に収まる見込み
+- 残りは従量課金（Lambda・SQS・Step Functions・S3・SSM・DynamoDB のオンデマンド）で、デモの実行量なら無料枠に収まる見込み
 - **CloudWatch アラーム（Scheduler の DLQ。#101・実行が始まらない日。#109・メール送信キューの DLQ。#135）は存在する間、月額で課金される**: 標準の解像度のアラームは、アラームのメトリクス 1 つあたり月 $0.10 で、無料枠は 10 個（料金ページの写しと第三者の解説による。公式の料金ページの該当箇所は読めていない）。このデモは 3 つで、`dev` は検証の間だけ存在する
 - 試し終えたら CDK → Terraform の順に削除する
 - 削除後も残る 2 つ（state バケットと CDK のブートストラップ）は、中身の保管料だけがかかる。どちらも量が小さく、残す理由がある（下記「`dev` での検証結果」の削除後に残るもの）
@@ -527,4 +547,4 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 元資料の構成のうち、デモでは省いたもの。必要になったら追加する。
 
 - プライベートサブネット / NAT Gateway（実在の外部 SaaS へ接続する場合に必要）。LMI 用の VPC はパブリックサブネットだけで作る（「LMI」）
-- 元資料「改善提案の候補」: 決定的な `MessageDeduplicationId`、Consumer の冪等化、投入を `waitForTaskToken` 方式に変えて Consumer の結果を返すこと（データ連携の LMI 化で使う `waitForTaskToken` とは別）
+- 元資料「改善提案の候補」: 決定的な `MessageDeduplicationId`、投入を `waitForTaskToken` 方式に変えて Consumer の結果を返すこと（データ連携の LMI 化で使う `waitForTaskToken` とは別）

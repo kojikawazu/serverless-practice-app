@@ -9,11 +9,18 @@ locals {
       actions   = ["sqs:SendMessage"]
       resources = [aws_sqs_queue.mail.arn]
     }]
-    consumer = [{
-      # SQS イベントソースが使う操作（Lambda の AWSLambdaSQSQueueExecutionRole と同じ範囲）
-      actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-      resources = [aws_sqs_queue.mail.arn]
-    }]
+    consumer = [
+      {
+        # SQS イベントソースが使う操作（Lambda の AWSLambdaSQSQueueExecutionRole と同じ範囲）
+        actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        resources = [aws_sqs_queue.mail.arn]
+      },
+      {
+        # 送信記録の読み書き（docs/03「Consumer Lambda」・#136）。テーブルの作成・削除は Terraform だけが行う
+        actions   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
+        resources = [aws_dynamodb_table.send_records.arn]
+      },
+    ]
     data-sync = [
       {
         actions   = ["s3:PutObject"]

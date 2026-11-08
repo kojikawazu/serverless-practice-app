@@ -85,7 +85,7 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 
 ```bash
 ./scripts/batch.sh local run                   # 起動し、終わるまで待って状態・エラーを出す
-./scripts/batch.sh local run dataSync          # enqueue / dataSync / consumer のいずれかで失敗を注入する
+./scripts/batch.sh local run dataSync          # enqueue / dataSync / consumer / consumerAfterSend のいずれかで失敗を注入する
 ./scripts/batch.sh dev run --hold-seconds 960  # データ連携が結果を返す前に 960 秒待つ（0〜1,200。待つ上限は 360 秒 + この秒数）
 ./scripts/batch.sh local logs <実行名>         # 4 つの Lambda のログから、その実行の行だけを出す
 ./scripts/batch.sh local dlq                   # DLQ のメッセージ数を出す

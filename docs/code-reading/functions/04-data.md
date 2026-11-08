@@ -6,13 +6,14 @@
 
 | 型 / 構造 | 場所 | 説明 |
 |---|---|---|
-| `TaskInput` | `functions/src/schemas/execution.ts:53` | 投入・データ連携が受け取るタスク入力。`executionName`（必須。英数字・`-`・`_` の 1〜80 文字）・`failAt`・`holdSeconds`（0〜1,200 の整数） |
-| `DataSyncTaskInput` | `functions/src/schemas/execution.ts:71` | `TaskInput` に `taskToken`（1〜2,048 文字）を足したもの |
-| `MailMessage` | `functions/src/schemas/mail-message.ts:29` | SQS に積むメッセージの本文。`executionName`・`recipientId`（`r-001` 形式）・`email`（`@example.com` のみ）・`subject`・`simulateFailure` |
+| `TaskInput` | `functions/src/schemas/execution.ts:58` | 投入・データ連携が受け取るタスク入力。`executionName`（必須。英数字・`-`・`_` の 1〜80 文字）・`failAt`・`holdSeconds`（0〜1,200 の整数） |
+| `DataSyncTaskInput` | `functions/src/schemas/execution.ts:76` | `TaskInput` に `taskToken`（1〜2,048 文字）を足したもの |
+| `MailMessage` | `functions/src/schemas/mail-message.ts:44` | SQS に積むメッセージの本文。`executionName`・`recipientId`（`r-001` 形式）・`email`（`@example.com` のみ）・`subject`・`simulateFailure`（`none` / `beforeSend` / `afterSend`） |
+| 送信記録の項目（非公開） | `functions/src/repositories/send-record-repository.ts:39` | DynamoDB の 1 項目。`messageKey`（`<実行名>:<配信対象 ID>`）・`status`（`SENDING` / `SENT`）・`expiresAt`（7 日後のエポック秒。TTL） |
 | `OutgoingMail` | `functions/src/types/mail.ts:5` | メール送信の口へ渡す内容。`MailMessage` から送信に要る項目だけを取り出し、`email` を `to` に名前を変える |
 | `Recipient` | `functions/src/types/recipient.ts:4` | 配信対象。`recipientId`・`email`・`name` |
 | `ExportFile`（非公開） | `functions/src/handlers/data-sync.ts:71` | S3 に書く連携ファイル。`executionName`・`exportedAt`（ISO 8601、UTC）・`recipients` |
-| `EnqueueResult` / `DataSyncResult` | `enqueue.ts:35` / `data-sync.ts:61` | Step Functions へ返す出力。`{ enqueued }` / `{ exported, s3Key }` |
+| `EnqueueResult` / `DataSyncResult` | `enqueue.ts:52` / `data-sync.ts:61` | Step Functions へ返す出力。`{ enqueued }` / `{ exported, s3Key }` |
 | `ExecutionStatusEvent` / `AlarmStateChangeEvent` | `execution-status-event.ts:42` / `alarm-state-change-event.ts:28` | Slack 通知が受け取るイベントのうち、通知に使う項目だけ。未知のキーは拒否せず取り除く |
 | `ExecutionFailureNotice` / `AlarmNotice` | `functions/src/types/notification.ts:6` / `:21` | 通知の口へ渡す内容。`error` / `cause` は `string \| null` にそろえてある |
 
@@ -47,15 +48,15 @@ flowchart TB
     NT -->|"SlackStub"| LOG
 ```
 
-- **`failAt` は値の形を変えながら下流へ運ばれる。** 実行入力の `failAt` は、ステートマシンがタスク入力へそのまま入れる。`consumer` のときは、投入がメッセージ本文の `simulateFailure: true` に変えて Consumer へ渡す（`enqueue.ts:112`）。Consumer は実行入力を見ないため、この形でしか伝わらない
+- **`failAt` は値の形を変えながら下流へ運ばれる。** 実行入力の `failAt` は、ステートマシンがタスク入力へそのまま入れる。`consumer` / `consumerAfterSend` のときは、投入がメッセージ本文の `simulateFailure`（`beforeSend` / `afterSend`）に変えて Consumer へ渡す（`enqueue.ts:129`）。Consumer は実行入力を見ないため、この形でしか伝わらない
 - **実行名（`executionName`）がすべてをつなぐ。** タスク入力 → メッセージ本文 → 送信内容 → スタブのログ、タスク入力 → S3 のキーと連携ファイル、のどこにも入る。`scripts/batch.sh local logs <実行名>` は、この項目で 4 つの Lambda のログから 1 つの実行の行を集める
-- **外部への書き込みは 3 種類だけ。** SQS（`SendMessageBatch`）・S3（`PutObject`）・Step Functions（`SendTask*`）。ほかの外部サービスへの「書き込み」は、すべてスタブのログ 1 行になる
+- **外部への書き込みは 4 種類だけ。** SQS（`SendMessageBatch`）・S3（`PutObject`）・Step Functions（`SendTask*`）・DynamoDB（送信記録の `PutItem` / `UpdateItem` / `DeleteItem`）。ほかの外部サービスへの「書き込み」は、すべてスタブのログ 1 行になる
 
 ## 読解上の注意点
 
 - **入口（`handler`）の環境変数の検証だけは、本体の外で投げる。** ロガーを作る前なので、本体の `try` の外になる。データ連携ではこのとき結果を返せず、ステートマシンのハートビートのタイムアウトで失敗になる（`data-sync.ts:250` のコメント）
 - **データ連携は「成功を返すのに失敗した」ときも `SendTaskFailure` を送りに行く。** `SendTaskSuccess`（`data-sync.ts:123`）が投げると、同じ `catch` で `reportFailure` に入る。処理は成功していても、結果の返却に失敗すれば失敗として返る
-- **Consumer のグループの判定は、FIFO の `MessageGroupId` が無いレコードを素通りさせる。** `sqsEventSchema` で `MessageGroupId` は任意で、無ければ失敗を後続へ伝えない（`consumer.ts:75`）。この挙動は UT で固定している（`functions/test/handlers/consumer.test.ts:200`）。メール送信キューは FIFO なので常に付く前提だが、実物のイベントで付かないことがあるかは確かめていない（要確認）
+- **Consumer のグループの判定は、FIFO の `MessageGroupId` が無いレコードを素通りさせる。** `sqsEventSchema` で `MessageGroupId` は任意で、無ければ失敗を後続へ伝えない（`consumer.ts:131`）。この挙動は UT で固定している（`functions/test/handlers/consumer.test.ts:263`）。メール送信キューは FIFO なので常に付く前提だが、実物のイベントで付かないことがあるかは確かめていない（要確認）
 - **`MySqlStub` は呼ぶたびに写しを返す。** 呼び出し側が配列や要素を書き換えても、固定データは変わらない（`stubs/mysql-stub.ts:22`）
 - **エラー名は文字列リテラルで固定している。** Step Functions の `Retry` は `errorType`（= `name`）で判定する。esbuild の minify でクラス名が変わっても契約が崩れないよう、`constructor.name` を使わない（`errors/validation-error.ts:10`）
 - **ログの `level` / `message` は呼び出し側の項目で上書きできない。** `formatLine`（`lib/logger.ts:22`）が先に取り除く。直列化できない値（循環参照・BigInt）が混ざったら、項目を捨てて `logError` を出す
