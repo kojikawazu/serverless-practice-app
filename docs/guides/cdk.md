@@ -73,7 +73,7 @@ Consumer のタイムアウトは `Token.asNumber` で数値として渡す。�
 
 ### 権限を CDK に持たせない理由
 
-Lambda や Step Functions の L2 は、呼び出し先の権限を `grant*` で足す。このデモでは、足されると IAM の設定が 2 か所（Terraform と CDK）に分かれ、どちらが正かが分からなくなる。そこで、ロールは `mutable: false` で参照し、スタックが IAM のロール・ポリシーを 1 つも作らないことを UT で固定している（`batch-stack.test.ts`）。
+Lambda や Step Functions の L2 は、呼び出し先の権限を `grant*` で足す。このデモでは、足されると IAM の設定が 2 か所（Terraform と CDK）に分かれ、どちらが正かが分からなくなる。そこで、ロールは `mutable: false` で参照し、スタックが IAM のロール・ポリシーを 1 つも作らないことを UT で固定している（`batch-stack.test.ts`）。代わりに、CDK でつながりを足しても権限は付かず、エラーにもならない。足りないことは実行して初めて分かる（[IAM 解説](iam.md#cdk-に権限を足させない)）。
 
 ### 作る順と消す順を、1 本のスクリプトに固定する理由
 

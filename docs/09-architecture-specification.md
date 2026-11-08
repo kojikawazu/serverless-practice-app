@@ -71,7 +71,7 @@
 | CloudWatch アラーム（Scheduler の DLQ・実行が始まらない日） | CDK | rule のイベントパターンにアラーム名を書くため、rule と同じスタックに置く。数えるキューは SSM のキュー名、数える Schedule group は SSM の group 名で参照。実行が始まらない日のアラームは、壁時計の窓とウォームアップを使うため L1（`CfnAlarm`）で作る |
 | EventBridge rule（失敗通知 3 つ） | CDK | 実行の失敗と、2 つのアラーム（アラームごとに 1 つ）。通知先 Lambda と同じスタックに置く |
 
-**名前の先決め**: IAM ポリシーは Terraform が先に作るため、CDK が後から作るリソースの ARN を知らない。関数名・ステートマシン名を `serverless-practice-app-<stage>-<name>` の命名規約で固定し、Terraform 側はこの接頭辞のワイルドカードで権限を付ける。
+**名前の先決め**: IAM ポリシーは Terraform が先に作るため、CDK が後から作るリソースの ARN を知らない。関数名・ステートマシン名を `serverless-practice-app-<stage>-<name>` の命名規約で固定し、Terraform 側はこの名前から組み立てた ARN で権限を付ける（接頭辞のワイルドカードは使わない。`*` は版・エイリアスの `:*`・ログストリーム・S3 のオブジェクトキーだけ。[IAM 解説](guides/iam.md#まだ無いリソースに名前で先に権限を付ける)）。
 
 **連動するパラメータ**: SQS の可視性タイムアウト（Terraform）と Consumer Lambda のタイムアウト（CDK）は連動する。Consumer のタイムアウトの正本は Terraform に置き、SSM 経由で CDK に渡す（04「連動するパラメータ」）。
 

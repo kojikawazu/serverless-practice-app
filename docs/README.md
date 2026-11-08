@@ -18,7 +18,7 @@ AWS のサービスやツールの仕組みから学ぶときは、全体像 →
 1. **何を作るか**: [01 要求仕様書](01-business-requirements.md) と [元資料](references/aws-batch-architecture.md)
 2. **全体像**: 09「[システム構成図](09-architecture-specification.md#システム構成図)」
 3. **流れ**: 03「[処理の流れ](03-functional-specification.md#処理の流れ)」のシーケンス図（正常系・実行の失敗・起動されない失敗）
-4. **各技術**: 下記「[技術の解説](#技術の解説guides)」を、処理の流れの順（EventBridge → Step Functions → Lambda → SQS FIFO → LMI）に読み、次に失敗の見張り（CloudWatch アラーム）、そのあと土台と環境（Terraform → CDK → LocalStack）を読む
+4. **各技術**: 下記「[技術の解説](#技術の解説guides)」を、処理の流れの順（EventBridge → Step Functions → Lambda → SQS FIFO → LMI）に読み、次に失敗の見張り（CloudWatch アラーム）と呼び出しの許可（IAM）、そのあと土台と環境（Terraform → CDK → LocalStack）を読む
 5. **動かして分かったこと**: 09「[LocalStack での検証結果](09-architecture-specification.md#localstack-での検証結果)」・「[`dev` での検証結果](09-architecture-specification.md#dev-での検証結果)」と [教訓ログ](lessons-learned.md)
 
 ## 技術の解説（guides）
@@ -33,11 +33,12 @@ AWS のサービスやツールの仕組みから学ぶときは、全体像 →
 | [SQS FIFO](guides/sqs-fifo.md) | メッセージグループ・重複排除・DLQ |
 | [LMI](guides/lmi.md) | Lambda Managed Instances と、15 分を超える実行 |
 | [CloudWatch アラーム](guides/cloudwatch.md) | メトリクスの評価・欠損データ・壁時計の窓と、実行が始まらない失敗の検知 |
+| [IAM](guides/iam.md) | ロールと信頼ポリシー・ID ベースとリソースベースのポリシー・評価の順序と、サービスどうしの呼び出しの許可 |
 | [Terraform](guides/terraform.md) | 土台（IAM・SQS・S3 など）の管理と state |
 | [CDK](guides/cdk.md) | アプリ（Lambda・ステートマシンなど）の管理と、Terraform からの受け渡し |
 | [LocalStack](guides/localstack.md) | 手元で AWS を再現する仕組みと、実 AWS との違い |
 
-IAM・S3・SSM Parameter Store は、使っているが解説がまだ無い（[#142](https://github.com/kojikawazu/serverless-practice-app/issues/142) で追加する）。それまでは 09「[IaC の責務分担](09-architecture-specification.md#iac-の責務分担)」と [06 セキュリティ仕様書](06-security-specification.md) が決定を書いている。
+S3・SSM Parameter Store は、使っているが解説がまだ無い（[#142](https://github.com/kojikawazu/serverless-practice-app/issues/142) で追加する）。それまでは 09「[IaC の責務分担](09-architecture-specification.md#iac-の責務分担)」と [06 セキュリティ仕様書](06-security-specification.md) が決定を書いている。
 
 ## 標準仕様書
 
