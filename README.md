@@ -19,6 +19,8 @@
 
 元資料は [docs/references/aws-batch-architecture.md](docs/references/aws-batch-architecture.md)、目的とスコープは [要求仕様書](docs/01-business-requirements.md) を参照してください。仕様書は [docs/](docs/README.md) を参照してください。
 
+使っている AWS のサービスやツールの仕組みから学ぶ場合は、[docs/README.md「構成を学ぶ順」](docs/README.md#構成を学ぶ順) から読んでください。全体像・処理の流れ・各技術の解説（[docs/guides/](docs/guides/)）の順に案内しています。
+
 ## セットアップ
 
 Node.js 22 以上が必要です（バージョンは [`.nvmrc`](.nvmrc)）。LocalStack・Terraform などインフラ側の前提ツールは [09 アーキテクチャ仕様書](docs/09-architecture-specification.md#前提ツール) を参照してください。
