@@ -108,7 +108,7 @@ SQS FIFO のメッセージ本文（JSON）と、送信時の属性。
 
 ### SSM パラメータ
 
-Terraform が書き、CDK が合成時に読む。名前は `/serverless-practice-app/<stage>/<name>`。
+Terraform が書き、CDK のスタックがデプロイ時に読む（下記「インデックス・制約」。仕組みは [SSM Parameter Store 解説](guides/ssm.md)）。名前は `/serverless-practice-app/<stage>/<name>`。
 
 #### フィールド
 
