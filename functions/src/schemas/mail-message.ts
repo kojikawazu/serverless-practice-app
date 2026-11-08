@@ -7,6 +7,21 @@ import { executionNameSchema } from "./execution";
 export const recipientIdSchema = z.string().regex(/^r-\d{3}$/);
 
 /**
+ * Consumer に失敗を注入する箇所（docs/05「メールメッセージ」）。実行入力の `failAt` から投入 Lambda が決める。
+ */
+export const simulateFailureSchema = z.enum([
+  /** 失敗させない */
+  "none",
+  /** 送る前に失敗する。`failAt: "consumer"`。何度受け取っても失敗し、DLQ へ移る */
+  "beforeSend",
+  /** 送って送信済みを記録した後に失敗する。`failAt: "consumerAfterSend"`。再配信では送らずに成功する */
+  "afterSend",
+]);
+
+/** Consumer に失敗を注入する箇所 */
+export type SimulateFailure = z.infer<typeof simulateFailureSchema>;
+
+/**
  * SQS FIFO に積むメールメッセージの本文（docs/05「メールメッセージ」）。
  * Consumer は SQS から受け取った本文をこのスキーマで検証してから送る。
  */
@@ -21,8 +36,8 @@ export const mailMessageSchema = z.strictObject({
   email: z.email().endsWith("@example.com"),
   /** 件名。デモでは固定文言 */
   subject: z.string().min(1),
-  /** `true` なら Consumer が注入エラーで失敗する。`failAt: "consumer"` のときだけ `true` */
-  simulateFailure: z.boolean(),
+  /** Consumer に失敗を注入する箇所。`failAt` が Consumer のどちらでもなければ `"none"` */
+  simulateFailure: simulateFailureSchema,
 });
 
 /** SQS FIFO に積むメールメッセージの本文 */

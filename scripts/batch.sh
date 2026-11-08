@@ -5,7 +5,7 @@
 # 使い方:
 #   scripts/batch.sh <stage> run [failAt] [--hold-seconds <秒>]
 #                                            実行を起動し、終わるまで待って結果を出す
-#                                            failAt: enqueue / dataSync / consumer（省略で失敗を注入しない）
+#                                            failAt: enqueue / dataSync / consumer / consumerAfterSend（省略で失敗を注入しない）
 #                                            --hold-seconds: データ連携 Lambda が結果を返す前に待つ秒数（docs/02「F-6」）
 #   scripts/batch.sh <stage> logs <実行名>   4 つの Lambda のログから、その実行名を含む行だけを出す
 #   scripts/batch.sh <stage> dlq             DLQ のメッセージ数を出す
@@ -30,7 +30,7 @@ MAX_HOLD_SECONDS=1200
 FUNCTIONS="enqueue consumer data-sync notify-slack"
 
 usage() {
-  echo "使い方: $0 {local|dev} run [enqueue|dataSync|consumer] [--hold-seconds <秒>]" >&2
+  echo "使い方: $0 {local|dev} run [enqueue|dataSync|consumer|consumerAfterSend] [--hold-seconds <秒>]" >&2
   echo "        $0 {local|dev} logs <実行名>" >&2
   echo "        $0 {local|dev} dlq" >&2
   exit 2

@@ -24,6 +24,17 @@ export const enqueueEnvSchema = baseEnvSchema.extend({
 });
 
 /**
+ * Consumer Lambda の環境変数。
+ */
+export const consumerEnvSchema = baseEnvSchema.extend({
+  /**
+   * 送信記録のテーブル名（docs/05「送信記録」）。DynamoDB のテーブル名の規則（英数字と `_` `-` `.`、3〜255 文字）に
+   * 合わない値は、DynamoDB へ送る前に弾く
+   */
+  SEND_RECORDS_TABLE: z.string().regex(/^[A-Za-z0-9_.-]{3,255}$/),
+});
+
+/**
  * データ連携 Lambda の環境変数。
  */
 export const dataSyncEnvSchema = baseEnvSchema.extend({

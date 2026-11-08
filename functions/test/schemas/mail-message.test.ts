@@ -7,7 +7,7 @@ const VALID = {
   recipientId: "r-001",
   email: "user1@example.com",
   subject: "serverless-practice-app デモ配信",
-  simulateFailure: false,
+  simulateFailure: "none",
 };
 
 describe("mailMessageSchema（SQS メッセージ本文）", () => {
@@ -16,14 +16,15 @@ describe("mailMessageSchema（SQS メッセージ本文）", () => {
       expect(mailMessageSchema.parse(VALID)).toEqual(VALID);
     });
 
-    it("simulateFailure が true の本文を受理する", () => {
-      expect(
-        mailMessageSchema.parse({ ...VALID, simulateFailure: true }),
-      ).toEqual({
-        ...VALID,
-        simulateFailure: true,
-      });
-    });
+    it.each(["none", "beforeSend", "afterSend"])(
+      "simulateFailure が %s の本文を受理する",
+      (simulateFailure) => {
+        expect(mailMessageSchema.parse({ ...VALID, simulateFailure })).toEqual({
+          ...VALID,
+          simulateFailure,
+        });
+      },
+    );
   });
 
   describe("準正常系", () => {
@@ -62,12 +63,15 @@ describe("mailMessageSchema（SQS メッセージ本文）", () => {
       ).toBe(false);
     });
 
-    it('文字列の "true" を simulateFailure として受理しない', () => {
-      expect(
-        mailMessageSchema.safeParse({ ...VALID, simulateFailure: "true" })
-          .success,
-      ).toBe(false);
-    });
+    // 真偽値だった頃（#136 より前）の本文は、どちらの失敗を注入するか読めないため受理しない
+    it.each([true, false, "true", "consumer", "AfterSend"])(
+      "simulateFailure が %s の本文を受理しない",
+      (simulateFailure) => {
+        expect(
+          mailMessageSchema.safeParse({ ...VALID, simulateFailure }).success,
+        ).toBe(false);
+      },
+    );
   });
 
   describe("異常系", () => {

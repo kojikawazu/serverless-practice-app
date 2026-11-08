@@ -34,14 +34,14 @@
 |---|--------|--------|------|
 | 1 | 投入: 配信対象 3 件をキューへ送り、`{ enqueued: 3 }` を返す | UT | 正常系 |
 | 2 | 投入: 重複排除 ID が `<executionName>:<recipientId>`、グループ ID が `recipientId` になる | UT | 正常系 |
-| 3 | 投入: `failAt: "consumer"` のとき全メッセージの `simulateFailure` が `true` | UT | 正常系 |
+| 3 | 投入: `failAt: "consumer"` のとき全メッセージの `simulateFailure` が `beforeSend`、`consumerAfterSend` のとき `afterSend`（それ以外は `none`） | UT | 正常系 |
 | 4 | 投入: `failAt: "enqueue"` のとき SQS を呼ばずに `InjectedFailureError` を投げる | UT | 準正常系 |
 | 5 | 投入: `failAt` が未定義の値なら `ValidationError` を投げる | UT | 準正常系 |
 | 6 | 投入: `executionName` に `/` を含むと `ValidationError` を投げる | UT | 準正常系 |
 | 7 | 投入: 同じ入力で 2 回呼ぶと、2 回とも同じ重複排除 ID で送る（Retry 時の重複排除の前提） | UT | 準正常系 |
 | 8 | 投入: `SendMessageBatch` の一部が失敗すると `EnqueuePartialFailureError` を投げる | UT | 異常系 |
 | 9 | Consumer: 5 件すべて成功なら `batchItemFailures` が空 | UT | 正常系 |
-| 10 | Consumer: `simulateFailure: true` の 1 件だけが `batchItemFailures` に入る | UT | 準正常系 |
+| 10 | Consumer: `simulateFailure: "beforeSend"` の 1 件だけが `batchItemFailures` に入る | UT | 準正常系 |
 | 11 | Consumer: JSON として読めない本文の 1 件だけが `batchItemFailures` に入り、他は送信される | UT | 準正常系 |
 | 12 | データ連携: S3 に `exports/<日付>/<実行名>.json` を書き、BigQuery・Cuenote FC スタブへ出力する | UT | 正常系 |
 | 13 | データ連携: `failAt: "dataSync"` のとき S3 には書き、BigQuery・Cuenote FC へは出力せずに失敗する | UT | 準正常系 |
@@ -107,6 +107,11 @@
 | 73 | 通知 Lambda: メール送信キューの DLQ のアラームも、アラーム名で絞らず、同じ形でアラーム名と理由を Slack スタブへ出す（#135） | UT | 正常系 |
 | 74 | `local` で、`failAt: "consumer"` の実行の後、メール送信キューの DLQ のアラームが `ALARM` になる。DLQ の 2 つのメトリクス（`ApproximateNumberOfMessagesVisible`・`NumberOfMessagesSent`）の出方と、DLQ を空にした後のアラームの状態を記録する。同じ形のイベントを `put-events` で入れると、rule を経て Slack スタブのログが出る（09「LocalStack での検証結果」。#135） | 手動 | 準正常系 |
 | 75 | `dev` で、`failAt: "consumer"` の実行の後、メール送信キューの DLQ のアラームが `ALARM` になり、Slack スタブのログにアラーム名が出る。実行の終了から通知までの時間と、DLQ の `NumberOfMessagesSent` を記録する。DLQ を空にすると `OK` に戻る（09「`dev` での検証結果」。#135） | 手動 | 準正常系 |
+| 76 | Consumer: 同じメッセージが 2 回届いても、メール送信スタブへの送信は 1 回で、2 回目は送らずに成功として返す。`simulateFailure: "afterSend"` は送って送信済みにした後に失敗し、再配信では送らずに成功する。実行名が違えば同じ宛先でも送る（#136） | UT | 正常系 |
+| 77 | Consumer: 送信中の記録が残っていたら、送らずに `SendStateUnknownError` で失敗として返す。送信が失敗したら送信中の記録を消し、次の受信で送り直せる。送った後に送信済みにできなければ、次の受信では送り直さない。記録を書けない・消せないときも、送ったかもしれないメールを送り直さない（#136） | UT | 準正常系・異常系 |
+| 78 | 送信記録（DynamoDB）: 送信中は、キーが無いことを条件に 7 日後の期限で書く。断られたら強い整合性で読み直し、送信済みなら `sent`、送信中・読めないなら `unknown`。消すのは送信中のときだけで、条件に合わなければ何もしない。それ以外の失敗はそのまま投げる（#136） | UT | 正常系・準正常系・異常系 |
+| 79 | CDK: Consumer に、送信記録のテーブル名を SSM（`send-records/name`）から環境変数 `SEND_RECORDS_TABLE` で渡す（#136） | UT | 正常系 |
+| 80 | `failAt: "consumerAfterSend"` の実行が `SUCCEEDED` になり、可視性タイムアウトの後の再配信で配信対象ごとに「送信済みのため送りません」のログが出て、メール送信スタブのログは配信対象ごとに 1 回だけ、DLQ にはメッセージが届かない（#136） | IT | 準正常系 |
 
 次のケースは、確かめている流れを 03「処理の流れ」の図で追える。
 
@@ -115,6 +120,7 @@
 | #5・#26（実行入力の検証エラー） | 03「[実行入力の検証エラー](03-functional-specification.md#実行入力の検証エラー)」 |
 | #7・#8（投入の一部の失敗） | 03「[投入の一部の失敗を `Retry` で送り直す](03-functional-specification.md#投入の一部の失敗を-retry-で送り直す)」 |
 | #11・#24（Consumer の不正な本文・同じグループの後続） | 03「[本文が不正なメッセージ（Consumer）](03-functional-specification.md#本文が不正なメッセージconsumer)」 |
+| #76・#77・#80（送信記録による二重送信の防止） | 03「[送った直後に落ちたメッセージの再配信](03-functional-specification.md#送った直後に落ちたメッセージの再配信failat-consumeraftersend)」 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 

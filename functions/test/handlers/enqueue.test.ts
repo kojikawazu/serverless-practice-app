@@ -127,22 +127,28 @@ describe("enqueue", () => {
         recipientId: "r-001",
         email: "user1@example.com",
         subject: "serverless-practice-app デモ配信",
-        simulateFailure: false,
+        simulateFailure: "none",
       });
     });
 
-    it("failAt=consumer のとき、全メッセージの simulateFailure が true になる", async () => {
-      const { deps } = setup();
+    it.each([
+      ["consumer", "beforeSend"],
+      ["consumerAfterSend", "afterSend"],
+    ] as const)(
+      "failAt=%s のとき、全メッセージの simulateFailure が %s になる",
+      async (failAt, expected) => {
+        const { deps } = setup();
 
-      await enqueue({ executionName: "run-1", failAt: "consumer" }, deps);
+        await enqueue({ executionName: "run-1", failAt }, deps);
 
-      const flags = sentEntries().map(
-        (entry) =>
-          mailMessageSchema.parse(JSON.parse(entry.MessageBody ?? ""))
-            .simulateFailure,
-      );
-      expect(flags).toEqual([true, true, true]);
-    });
+        const flags = sentEntries().map(
+          (entry) =>
+            mailMessageSchema.parse(JSON.parse(entry.MessageBody ?? ""))
+              .simulateFailure,
+        );
+        expect(flags).toEqual([expected, expected, expected]);
+      },
+    );
 
     it("成功したら実行名と件数を info ログに出す", async () => {
       const { deps, records } = setup();
@@ -171,7 +177,7 @@ describe("enqueue", () => {
       expect(sqsMock.commandCalls(SendMessageBatchCommand)).toHaveLength(0);
     });
 
-    it("failAt=dataSync は投入には影響せず、simulateFailure は false のまま送る", async () => {
+    it("failAt=dataSync は投入には影響せず、simulateFailure は none のまま送る", async () => {
       const { deps } = setup();
 
       await expect(
@@ -179,7 +185,7 @@ describe("enqueue", () => {
       ).resolves.toEqual({ enqueued: 3 });
       expect(
         sentEntries().every((entry) =>
-          entry.MessageBody?.includes('"simulateFailure":false'),
+          entry.MessageBody?.includes('"simulateFailure":"none"'),
         ),
       ).toBe(true);
     });

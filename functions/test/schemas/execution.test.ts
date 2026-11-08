@@ -21,7 +21,7 @@ describe("taskInputSchema（タスク入力）", () => {
       });
     });
 
-    it.each(["enqueue", "dataSync", "consumer"] as const)(
+    it.each(["enqueue", "dataSync", "consumer", "consumerAfterSend"] as const)(
       "failAt=%s を受理する",
       (failAt) => {
         expect(
@@ -67,6 +67,16 @@ describe("taskInputSchema（タスク入力）", () => {
           .success,
       ).toBe(false);
     });
+
+    // メッセージ本文の simulateFailure の値（afterSend）を、実行入力の failAt と取り違えて渡しても通さない
+    it.each(["afterSend", "consumerAftersend"])(
+      "Consumer の失敗の注入に似た、未定義の failAt（%s）を拒否する",
+      (failAt) => {
+        expect(
+          taskInputSchema.safeParse({ executionName: "run-1", failAt }).success,
+        ).toBe(false);
+      },
+    );
 
     it("大文字小文字が違う failAt を拒否する（DataSync は dataSync と別物）", () => {
       expect(

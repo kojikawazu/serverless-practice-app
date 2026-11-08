@@ -375,6 +375,67 @@ export async function findStubLogs(
 }
 
 /**
+ * Consumer が「送信済みのため送らなかった」ログから、指定した実行のメールのキーを集める（docs/03「Consumer Lambda」・#136）。
+ * このログはスタブの出力ではなく、実行名の項目も持たないため、`findStubLogs` ではなくキーの接頭辞で絞り込む。
+ *
+ * @param executionName - 実行名
+ * @returns 送らなかったメールのキー（`<実行名>:<配信対象 ID>`）。0 件なら空配列
+ */
+export async function findSkippedMessageKeys(
+  executionName: string,
+): Promise<string[]> {
+  const found: string[] = [];
+  let nextToken: string | undefined;
+  do {
+    // filterPattern の対応は LocalStack と AWS で差があるため、全件を取って手元で絞り込む（findStubLogs と同じ）
+    const page: FilterLogEventsCommandOutput = await logs.send(
+      new FilterLogEventsCommand({
+        logGroupName: `/aws/lambda/${PREFIX}-consumer`,
+        nextToken,
+      }),
+    );
+    for (const event of page.events ?? []) {
+      const key = parseSkippedMessageKey(event.message);
+      if (key?.startsWith(`${executionName}:`) === true) {
+        found.push(key);
+      }
+    }
+    nextToken = page.nextToken;
+  } while (nextToken !== undefined);
+  return found;
+}
+
+/**
+ * ログの 1 行を、Consumer が送信済みのため送らなかったログとして読む。
+ *
+ * @param message - ログの 1 行
+ * @returns そのログのメールのキー。JSON でない行や、別のログは `undefined`
+ */
+function parseSkippedMessageKey(
+  message: string | undefined,
+): string | undefined {
+  if (message === undefined) {
+    return undefined;
+  }
+  try {
+    const value: unknown = JSON.parse(message);
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "message" in value &&
+      value.message === "送信済みのため送りません" &&
+      "messageKey" in value &&
+      typeof value.messageKey === "string"
+    ) {
+      return value.messageKey;
+    }
+  } catch {
+    // JSON でない行は対象のログではない
+  }
+  return undefined;
+}
+
+/**
  * ログの 1 行をスタブの構造化ログとして読む。
  *
  * @param message - ログの 1 行

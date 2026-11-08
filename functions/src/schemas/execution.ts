@@ -10,6 +10,11 @@ export const failAtSchema = z.enum([
   "dataSync",
   /** Consumer が全メッセージで失敗する。実行は SUCCEEDED のまま、メッセージは DLQ へ移り、DLQ のアラームで通知が出る */
   "consumer",
+  /**
+   * Consumer がメールを送って送信済みを記録した後に失敗する（送った直後に落ちたことの再現）。
+   * 再配信では送信済みの記録を見つけて送り直さず、メールは 1 通ずつだけ送られる（#136）
+   */
+  "consumerAfterSend",
 ]);
 
 /** 失敗を注入する箇所 */

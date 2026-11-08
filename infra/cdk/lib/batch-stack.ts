@@ -175,7 +175,8 @@ export class BatchStack extends Stack {
         timeout: Duration.seconds(
           Token.asNumber(this.ssmValue("consumer/timeout-seconds")),
         ),
-        environment: {},
+        // 送信記録のテーブル（Terraform）。同じメールを送り直さないために読み書きする（docs/05「送信記録」・#136）
+        environment: { SEND_RECORDS_TABLE: this.ssmValue("send-records/name") },
       },
     );
     const useLmi = LMI_STAGES.includes(stage);

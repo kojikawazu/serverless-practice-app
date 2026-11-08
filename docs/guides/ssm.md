@@ -67,9 +67,9 @@ for_each で 1 つのマップから書く  ──▶  /serverless-practice-app/
 | 項目 | このプロジェクト | 正本 |
 |---|---|---|
 | 名前 | `/serverless-practice-app/<stage>/<name>`。ステージで階層を分ける | 10「[命名](../10-miscellaneous-specification.md#コーディング規約命名)」 |
-| 数 | `local` は 15、`dev` は LMI のキャパシティプロバイダの分を足して 16 | 05「[SSM パラメータ](../05-data-specification.md#ssm-パラメータ)」 |
+| 数 | `local` は 16、`dev` は LMI のキャパシティプロバイダの分を足して 17 | 05「[SSM パラメータ](../05-data-specification.md#ssm-パラメータ)」 |
 | 型・層 | すべて `String`・標準。秘匿値を置かないため `SecureString` は使わない | 同上 |
-| 中身 | キュー・DLQ・バケット・Schedule group の ARN と名前、IAM ロールの ARN、Consumer のタイムアウト（秒） | 同上 |
+| 中身 | キュー・DLQ・バケット・送信記録のテーブル・Schedule group の ARN と名前、IAM ロールの ARN、Consumer のタイムアウト（秒） | 同上 |
 | 読み方 | デプロイ時に読む（`valueForStringParameter`）。合成時に読む方式（`valueFromLookup`）は使わない | 同上 |
 
 ステージの値（`local` / `dev`）は名前の中にだけ現れ、値そのものはステージをまたがない。`local` の CDK は `/serverless-practice-app/local/...` だけを読む。
@@ -104,7 +104,7 @@ CloudFormation は、指定した名前のパラメータが無いと検証エ�
 
 ### 料金
 
-標準のパラメータは追加料金なし（上記）。このデモは 15〜16 個で、上限の 10,000 にも 4 KB にも遠い。
+標準のパラメータは追加料金なし（上記）。このデモは 16〜17 個で、上限の 10,000 にも 4 KB にも遠い。
 
 ## LocalStack との違い
 
