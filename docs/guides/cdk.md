@@ -45,9 +45,10 @@ Lambda のコード: NodejsFunction が synth の中で esbuild によりバン�
 
 公式によると、L1 は CloudFormation のリソースと 1 対 1 に対応し、抽象化がない。L2 は既定値・補助メソッド（権限の付与の `grant*` など）を持つ。L3 は複数のリソースをまとめたパターン（公式「Constructs」）。
 
-このプロジェクトでは、ほとんどが L2（`nodejs.NodejsFunction`・`sfn.StateMachine`・`events.Rule`・`logs.LogGroup`）で、L1 を使うのは 2 か所だけ（`batch-stack.ts`）。
+このプロジェクトでは、ほとんどが L2（`nodejs.NodejsFunction`・`sfn.StateMachine`・`events.Rule`・`logs.LogGroup`）で、L1 を使うのは 3 か所だけ（`batch-stack.ts`）。
 
 - 定時の Schedule（`scheduler.CfnSchedule`）: L1 で書く。L1 では CDK の既定が効かないため、`RetryPolicy` を省略するとサービス側の既定になる。その値（185 回・24 時間）を `dev` の記録で確かめ、同じ値を明示した（[#92](https://github.com/kojikawazu/serverless-practice-app/issues/92)。04「リトライ」）
+- 実行が始まらない日のアラーム（`cloudwatch.CfnAlarm`）: 壁時計の評価の窓とウォームアップを、L2 の `cloudwatch.Alarm` が項目として持たないため、L1 で書く（#109。[CloudWatch アラーム解説](cloudwatch.md#起きなかったことを数えるアラーム)）。Scheduler の DLQ のアラームは L2 のまま
 - LMI の関数の紐付け（`lambda.CfnFunction`）: L2 の `NodejsFunction` が持つ L1 の子（`node.defaultChild`）を取り出し、キャパシティプロバイダの設定を直接書く。キャパシティプロバイダは Terraform が作ったものを読み込んで使う（`ICapacityProvider`）が、読み込んだものには関数を足す `addFunction` が無いため
 
 ### 別のスタック（Terraform）の値を SSM から読む
