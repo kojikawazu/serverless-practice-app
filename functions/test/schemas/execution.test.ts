@@ -1,59 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   dataSyncTaskInputSchema,
-  executionInputSchema,
   taskInputSchema,
 } from "../../src/schemas/execution";
-
-describe("executionInputSchema（実行入力）", () => {
-  describe("正常系", () => {
-    it("failAt を省略した入力を受理する（Scheduler の定時起動は {} を渡す）", () => {
-      expect(executionInputSchema.parse({})).toEqual({});
-    });
-
-    it.each(["enqueue", "dataSync", "consumer"] as const)(
-      "failAt=%s を受理する",
-      (failAt) => {
-        expect(executionInputSchema.parse({ failAt })).toEqual({ failAt });
-      },
-    );
-  });
-
-  describe("準正常系", () => {
-    it("未定義の failAt を拒否する", () => {
-      expect(executionInputSchema.safeParse({ failAt: "notify" }).success).toBe(
-        false,
-      );
-    });
-
-    it("大文字小文字が違う failAt を拒否する（DataSync は dataSync と別物）", () => {
-      expect(
-        executionInputSchema.safeParse({ failAt: "DataSync" }).success,
-      ).toBe(false);
-    });
-
-    it("綴り違いのキー（failat）を「failAt 省略」として通さずに拒否する", () => {
-      expect(
-        executionInputSchema.safeParse({ failat: "dataSync" }).success,
-      ).toBe(false);
-    });
-
-    it("failAt が null なら拒否する（省略と null を同一視しない）", () => {
-      expect(executionInputSchema.safeParse({ failAt: null }).success).toBe(
-        false,
-      );
-    });
-  });
-
-  describe("異常系", () => {
-    it.each([null, "dataSync", [], 1])(
-      "オブジェクトでない入力 %j を拒否する",
-      (input) => {
-        expect(executionInputSchema.safeParse(input).success).toBe(false);
-      },
-    );
-  });
-});
 
 describe("taskInputSchema（タスク入力）", () => {
   describe("正常系", () => {
@@ -65,6 +14,21 @@ describe("taskInputSchema（タスク入力）", () => {
 
       expect(taskInputSchema.parse(input)).toEqual(input);
     });
+
+    it("実行名だけの入力を受理する（Scheduler の定時起動は実行入力に {} を渡す）", () => {
+      expect(taskInputSchema.parse({ executionName: "run-1" })).toEqual({
+        executionName: "run-1",
+      });
+    });
+
+    it.each(["enqueue", "dataSync", "consumer"] as const)(
+      "failAt=%s を受理する",
+      (failAt) => {
+        expect(
+          taskInputSchema.parse({ executionName: "run-1", failAt }),
+        ).toEqual({ executionName: "run-1", failAt });
+      },
+    );
 
     it("Step Functions の上限と同じ 80 文字の実行名を受理する", () => {
       const executionName = "a".repeat(80);
@@ -97,6 +61,38 @@ describe("taskInputSchema（タスク入力）", () => {
       },
     );
 
+    it("未定義の failAt を拒否する", () => {
+      expect(
+        taskInputSchema.safeParse({ executionName: "run-1", failAt: "notify" })
+          .success,
+      ).toBe(false);
+    });
+
+    it("大文字小文字が違う failAt を拒否する（DataSync は dataSync と別物）", () => {
+      expect(
+        taskInputSchema.safeParse({
+          executionName: "run-1",
+          failAt: "DataSync",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("実行入力の綴り違いのキー（failat）を「failAt 省略」として通さずに拒否する", () => {
+      expect(
+        taskInputSchema.safeParse({
+          executionName: "run-1",
+          failat: "dataSync",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("failAt が null なら拒否する（省略と null を同一視しない）", () => {
+      expect(
+        taskInputSchema.safeParse({ executionName: "run-1", failAt: null })
+          .success,
+      ).toBe(false);
+    });
+
     it("実行名が無い入力を拒否する", () => {
       expect(taskInputSchema.safeParse({ failAt: "enqueue" }).success).toBe(
         false,
@@ -110,31 +106,29 @@ describe("taskInputSchema（タスク入力）", () => {
         false,
       );
     });
+
+    it.each([null, "run-1", [], 1])(
+      "オブジェクトでない入力 %j を拒否する",
+      (input) => {
+        expect(taskInputSchema.safeParse(input).success).toBe(false);
+      },
+    );
   });
 });
 
 describe("holdSeconds（検証用の待ち時間）", () => {
   describe("正常系", () => {
-    it.each([0, 960, 1200])(
-      "実行入力・タスク入力とも %d 秒を受理する",
-      (holdSeconds) => {
-        expect(executionInputSchema.parse({ holdSeconds })).toEqual({
-          holdSeconds,
-        });
-        expect(
-          taskInputSchema.parse({ executionName: "run-1", holdSeconds }),
-        ).toEqual({ executionName: "run-1", holdSeconds });
-      },
-    );
+    it.each([0, 960, 1200])("%d 秒を受理する", (holdSeconds) => {
+      expect(
+        taskInputSchema.parse({ executionName: "run-1", holdSeconds }),
+      ).toEqual({ executionName: "run-1", holdSeconds });
+    });
   });
 
   describe("準正常系", () => {
     it.each([1201, -1, 1.5])(
       "範囲外・小数の %d 秒を拒否する",
       (holdSeconds) => {
-        expect(executionInputSchema.safeParse({ holdSeconds }).success).toBe(
-          false,
-        );
         expect(
           taskInputSchema.safeParse({ executionName: "run-1", holdSeconds })
             .success,
@@ -145,9 +139,10 @@ describe("holdSeconds（検証用の待ち時間）", () => {
 
   describe("異常系", () => {
     it.each(["60", null])("数値でない %j を拒否する", (holdSeconds) => {
-      expect(executionInputSchema.safeParse({ holdSeconds }).success).toBe(
-        false,
-      );
+      expect(
+        taskInputSchema.safeParse({ executionName: "run-1", holdSeconds })
+          .success,
+      ).toBe(false);
     });
   });
 });

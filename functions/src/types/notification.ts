@@ -15,11 +15,15 @@ export type ExecutionFailureNotice = {
 
 /**
  * アラームが ALARM になったことを知らせる通知の内容（docs/07「スタブへの出力」の slack）。
- * 実行が始まっていない失敗（Scheduler の起動の失敗。#101）を知らせるため、実行名は持たない。
+ * 実行が始まっていない失敗（Scheduler の起動の失敗 #101・起動が試みられなかった日 #109）を知らせるため、実行名は持たない。
  */
 export type AlarmNotice = {
+  /** ALARM になったアラームの名前。どちらの失敗かはこの名前で見分ける */
   alarmName: string;
-  /** CloudWatch が書く、ALARM になった理由の文。原因の詳細は DLQ のメッセージにある */
+  /**
+   * CloudWatch が書く、ALARM になった理由の文。起動の失敗の詳細は Scheduler の DLQ のメッセージにある。
+   * 起動が試みられなかった日は、DLQ にも何も届かない
+   */
   reason: string;
 };
 

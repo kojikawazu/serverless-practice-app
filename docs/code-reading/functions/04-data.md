@@ -6,8 +6,8 @@
 
 | 型 / 構造 | 場所 | 説明 |
 |---|---|---|
-| `TaskInput` | `functions/src/schemas/execution.ts:65` | 投入・データ連携が受け取るタスク入力。`executionName`（必須。英数字・`-`・`_` の 1〜80 文字）・`failAt`・`holdSeconds`（0〜1,200 の整数） |
-| `DataSyncTaskInput` | `functions/src/schemas/execution.ts:83` | `TaskInput` に `taskToken`（1〜2,048 文字）を足したもの |
+| `TaskInput` | `functions/src/schemas/execution.ts:53` | 投入・データ連携が受け取るタスク入力。`executionName`（必須。英数字・`-`・`_` の 1〜80 文字）・`failAt`・`holdSeconds`（0〜1,200 の整数） |
+| `DataSyncTaskInput` | `functions/src/schemas/execution.ts:71` | `TaskInput` に `taskToken`（1〜2,048 文字）を足したもの |
 | `MailMessage` | `functions/src/schemas/mail-message.ts:29` | SQS に積むメッセージの本文。`executionName`・`recipientId`（`r-001` 形式）・`email`（`@example.com` のみ）・`subject`・`simulateFailure` |
 | `OutgoingMail` | `functions/src/types/mail.ts:5` | メール送信の口へ渡す内容。`MailMessage` から送信に要る項目だけを取り出し、`email` を `to` に名前を変える |
 | `Recipient` | `functions/src/types/recipient.ts:4` | 配信対象。`recipientId`・`email`・`name` |
@@ -22,7 +22,7 @@
 
 | 扱い | 使っているスキーマ | 理由 |
 |---|---|---|
-| 未知のキーを**拒否**（`z.strictObject`） | `taskInputSchema`・`mailMessageSchema`・`executionInputSchema` | 自分たちが作る値。`failat` のような綴り違いを「省略」として通すと、失敗を注入したつもりで正常に動いてしまう |
+| 未知のキーを**拒否**（`z.strictObject`） | `taskInputSchema`・`mailMessageSchema` | 自分たちが作る値。`failat` のような綴り違いを「省略」として通すと、失敗を注入したつもりで正常に動いてしまう |
 | 未知のキーを**取り除く**（`z.object`） | `sqsEventSchema`・`executionStatusEventSchema`・`alarmStateChangeEventSchema` | AWS が作る値。エンベロープに多くの項目があり、使わない項目まで検証すると、形の違いだけで処理を捨てる（#30。LocalStack と実 AWS で日時の形が違った） |
 
 ## データフロー
@@ -63,9 +63,4 @@ flowchart TB
 
 ## 技術的負債・改善余地
 
-読解の時点（2026-11-08）で見つけたもの。修正はこのドキュメントの範囲外で、[#151](https://github.com/kojikawazu/serverless-practice-app/issues/151) で扱う。解消したら、この節から消す。
-
-- **`executionInputSchema`（`schemas/execution.ts:35`）は本番のコードから使われていない。** 参照はテスト（`execution.test.ts`・`parse.test.ts`）だけ。実行入力はステートマシンが `$merge` でタスク入力に丸ごと入れ（`infra/cdk/lib/batch-stack.ts:45`）、綴り違いのキーを実際に弾いているのは `taskInputSchema` の `strictObject`（07「[実行入力](../../07-api-specification.md#実行入力startexecution-の-input)」の記述と一致）。コメントの「綴り違いを拒否する」働きは、このスキーマでは起きていない。`dead-code.md` の「未使用の export」に当たりうる
-- **コメントが実装より古い箇所がある。**
-  - `schemas/execution-status-event.ts:9` — `TIMED_OUT` を「ステートマシンのタイムアウト（5 分）を超えた」と書いているが、タイムアウトは 40 分（`infra/cdk/lib/batch-stack.ts:244`・04「[パフォーマンス要件](../../04-non-functional-specification.md#パフォーマンス要件)」）
-  - `schemas/notification-event.ts:12`・`handlers/notify-slack.ts:22`・`types/notification.ts:18` — アラームの通知を「Scheduler の DLQ のアラーム（起動の失敗。#101）」としか書いていない。実行が始まらない日のアラーム（#109）も同じ経路で届く。`schemas/alarm-state-change-event.ts:5` は 2 つとも書いている
+読解の時点（2026-11-08）で見つけたもの（本番のコードから使われていない実行入力のスキーマ・実装より古いコメント）は、[#151](https://github.com/kojikawazu/serverless-practice-app/issues/151) で直した。いま残っているものは無い。新しく見つけたら、この節に足し、解消したら消す。

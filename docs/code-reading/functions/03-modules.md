@@ -38,7 +38,7 @@
 | 名前 | 場所 | 役割 |
 |---|---|---|
 | `baseEnvSchema` / `enqueueEnvSchema` / `dataSyncEnvSchema` | `functions/src/schemas/env.ts:6` / `:17` / `:29` | 環境変数。`QUEUE_URL` はスキームを http / https に限る |
-| `taskInputSchema` / `dataSyncTaskInputSchema` | `functions/src/schemas/execution.ts:55` / `:77` | Step Functions から渡るタスク入力。未知のキーを拒否する（`strictObject`） |
+| `taskInputSchema` / `dataSyncTaskInputSchema` | `functions/src/schemas/execution.ts:43` / `:65` | Step Functions から渡るタスク入力。未知のキーを拒否する（`strictObject`） |
 | `mailMessageSchema` | `functions/src/schemas/mail-message.ts:13` | SQS に積むメールメッセージの本文。宛先は `@example.com` に限る |
 | `sqsEventSchema` | `functions/src/schemas/sqs-event.ts:8` | Consumer が受け取る SQS イベントのうち、使う項目だけ |
 | `notificationEventSchema` | `functions/src/schemas/notification-event.ts:9` | `source` で見分ける判別 union。`executionStatusEventSchema`（`execution-status-event.ts:26`）と `alarmStateChangeEventSchema`（`alarm-state-change-event.ts:12`） |
@@ -50,7 +50,7 @@
 | `RecipientRepository` | `functions/src/types/recipient.ts:16` | 配信対象を取得する口。`MySqlStub`（`stubs/mysql-stub.ts:15`）が固定の 3 件を返す |
 | `MailSender` | `functions/src/types/mail.ts:17` | メールを送る口。`SendGridStub`（`stubs/sendgrid-stub.ts:7`） |
 | `ExportWriter` | `functions/src/types/export.ts:7` | データ連携の書き出し先の口。`BigQueryStub`・`CuenoteFcStub` の 2 つが実装する |
-| `FailureNotifier` | `functions/src/types/notification.ts:29` | 失敗を知らせる口（`notify` と `notifyAlarm`）。`SlackStub`（`stubs/slack-stub.ts:11`） |
+| `FailureNotifier` | `functions/src/types/notification.ts:33` | 失敗を知らせる口（`notify` と `notifyAlarm`）。`SlackStub`（`stubs/slack-stub.ts:11`） |
 | `ValidationError` | `functions/src/errors/validation-error.ts:7` | 入力がスキーマに合わない。`Retry` の対象にしない |
 | `InjectedFailureError` | `functions/src/errors/injected-failure-error.ts:7` | `failAt` で注入した失敗。`Retry` の対象にしない |
 | `EnqueuePartialFailureError` | `functions/src/errors/enqueue-partial-failure-error.ts:6` | `SendMessageBatch` の一部が失敗した。`Retry` の対象にする |
