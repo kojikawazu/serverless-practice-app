@@ -19,7 +19,8 @@ AWS のサービスやツールの仕組みから学ぶときは、全体像 →
 2. **全体像**: 09「[システム構成図](09-architecture-specification.md#システム構成図)」
 3. **流れ**: 03「[処理の流れ](03-functional-specification.md#処理の流れ)」のシーケンス図（正常系・実行の失敗・起動されない失敗）
 4. **各技術**: 下記「[技術の解説](#技術の解説guides)」を、処理の流れの順（EventBridge → Step Functions → Lambda → SQS FIFO → LMI）に読み、次に失敗の見張り（CloudWatch アラーム）と呼び出しの許可（IAM）、そのあと土台と環境（Terraform → CDK → LocalStack）を読む
-5. **動かして分かったこと**: 09「[LocalStack での検証結果](09-architecture-specification.md#localstack-での検証結果)」・「[`dev` での検証結果](09-architecture-specification.md#dev-での検証結果)」と [教訓ログ](lessons-learned.md)
+5. **コード**: [Lambda のコードの読解](code-reading/functions/README.md)（handler の形・層の構造・Lambda ごとの失敗の返し方）
+6. **動かして分かったこと**: 09「[LocalStack での検証結果](09-architecture-specification.md#localstack-での検証結果)」・「[`dev` での検証結果](09-architecture-specification.md#dev-での検証結果)」と [教訓ログ](lessons-learned.md)
 
 ## 技術の解説（guides）
 
@@ -73,7 +74,7 @@ S3・SSM Parameter Store は、使っているが解説がまだ無い（[#142](
 | `design/` | `/design-policy` | 開発設計方針（README + トピック別 01〜14） |
 | `mockups/` | `/mock-screen` | 画面仕様の正本（`screens.md` / `sequences/*.md`）と、そこからレンダリングした静的 HTML モック |
 | `test-design/` | `/test-design` | テスト設計ドキュメント |
-| `code-reading/` | `/code-reading` | コード読解ナレッジ |
+| [`code-reading/`](code-reading/) | `/code-reading` | コード読解ナレッジ（[Lambda（`functions/src`）](code-reading/functions/README.md)） |
 | [`references/`](references/) | （手動配置） | 元資料・外部から持ち込んだ参照資料（[AWS バッチ構成の整理と確認事項](references/aws-batch-architecture.md)） |
 | [`guides/`](guides/) | （手動配置） | 使っている技術の解説（一覧は上記「[技術の解説](#技術の解説guides)」） |
 
