@@ -6,7 +6,7 @@ import { z } from "zod";
 export const notifiedStatusSchema = z.enum([
   /** タスクの失敗が Retry で解消されずに終わった */
   "FAILED",
-  /** ステートマシンのタイムアウト（5 分）を超えた */
+  /** ステートマシンのタイムアウトを超えた（値の正本は infra/cdk の `batch-stack.ts`。docs/04「パフォーマンス要件」） */
   "TIMED_OUT",
   /** 手動で停止された */
   "ABORTED",

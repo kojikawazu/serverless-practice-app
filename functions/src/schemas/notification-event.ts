@@ -9,6 +9,6 @@ import { executionStatusEventSchema } from "./execution-status-event";
 export const notificationEventSchema = z.discriminatedUnion("source", [
   /** 実行が FAILED / TIMED_OUT / ABORTED で終わった（F-5） */
   executionStatusEventSchema,
-  /** Scheduler の DLQ のアラームが ALARM になった（起動の失敗。#101） */
+  /** 実行が始まらない失敗を知らせるアラームが ALARM になった（Scheduler の DLQ のアラーム #101・実行が始まらない日のアラーム #109） */
   alarmStateChangeEventSchema,
 ]);
