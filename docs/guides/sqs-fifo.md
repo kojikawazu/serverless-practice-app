@@ -132,7 +132,7 @@ FIFO は、**送る側の重複**を除く（公式「Exactly-once processing」
 
 ### Consumer の失敗は通知に乗らない
 
-Step Functions は、投入 Lambda がキューに積んで正常に終わった時点で成功になる。Consumer は Step Functions の外で動くため、Consumer の失敗で DLQ にメッセージが移っても、実行は `SUCCEEDED` のままで、失敗の通知は出ない。元資料のリスク 1 を再現するため、意図的にそうしている（02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」）。DLQ のアラームは将来構成（09「[将来構成](../09-architecture-specification.md#将来構成)」）。
+Step Functions は、投入 Lambda がキューに積んで正常に終わった時点で成功になる。Consumer は Step Functions の外で動くため、Consumer の失敗で DLQ にメッセージが移っても、実行は `SUCCEEDED` のままで、失敗の通知は出ない。元資料のリスク 1 を再現するため、意図的にそうしている（02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」）。DLQ のアラームは将来構成（09「[将来構成](../09-architecture-specification.md#将来構成)」）。置くときは、redrive で移ったメッセージが `NumberOfMessagesSent` に数えられない点に注意する（[CloudWatch アラーム解説](cloudwatch.md#送信数で数えるかメッセージ数で数えるか)）。
 
 ### 重複排除が効く範囲
 
