@@ -13,7 +13,7 @@ CDK が `functions/src/handlers/<name>.ts` の `handler` を各 Lambda の入口
 | 投入 `handler` | `functions/src/handlers/enqueue.ts:154` | Step Functions（同期） | 配信対象ごとのメールメッセージを SQS FIFO へ積む |
 | Consumer `handler` | `functions/src/handlers/consumer.ts:108` | SQS のイベントソースマッピング | 受け取ったメッセージを 1 件ずつ SendGrid スタブへ送り、失敗したものだけを返す |
 | データ連携 `handler` | `functions/src/handlers/data-sync.ts:257` | Step Functions（非同期 + `.waitForTaskToken`） | 配信対象を S3・BigQuery スタブ・Cuenote FC スタブへ書き、結果をタスクトークンで返す |
-| Slack 通知 `handler` | `functions/src/handlers/notify-slack.ts:113` | EventBridge のルール（非同期） | 実行の失敗・アラームの `ALARM` を Slack スタブへ知らせる |
+| Slack 通知 `handler` | `functions/src/handlers/notify-slack.ts:114` | EventBridge のルール（非同期） | 実行の失敗・アラームの `ALARM` を Slack スタブへ知らせる |
 
 呼ばれ方の違い（誰がやり直すか）は [Lambda 解説](../../guides/lambda.md#このプロジェクトで使う理由)、各関数の仕様は 03「[処理仕様](../../03-functional-specification.md#処理仕様)」を参照。
 

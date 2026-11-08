@@ -262,7 +262,7 @@ describe("バッチの実行（LocalStack）", () => {
   });
 
   // 他のケースのメッセージを巻き込まないよう最後に置く（ファイル先頭のコメント）
-  it('failAt: "consumer": SUCCEEDED のまま、配信対象の件数のメッセージが DLQ へ移り、Slack スタブには出ない', async () => {
+  it('failAt: "consumer": SUCCEEDED のまま、配信対象の件数のメッセージが DLQ へ移り、実行の失敗としては Slack スタブに出ない', async () => {
     const name = `${RUN_ID}-consumer`;
 
     const execution = await runExecution(resources.stateMachineArn, name, {
@@ -283,7 +283,9 @@ describe("バッチの実行（LocalStack）", () => {
       10_000,
     );
     expect([...inDlq].sort()).toEqual(recipientIds);
-    // DLQ へ移るまでの数分で通知が出ていれば届いている。Consumer の失敗は通知に乗らない（docs/02「F-5」）
+    // DLQ へ移るまでの数分で通知が出ていれば届いている。実行は SUCCEEDED のため、状態変化イベントの通知は出ない。
+    // Consumer の失敗は DLQ のアラームで通知されるが、その通知は実行名を持たないため、この絞り込みには入らない。
+    // LocalStack はアラームの状態変化を EventBridge に出さないため、アラームの通知は IT では確かめない（docs/02「F-5」・#135）
     expect(await findStubLogs("notify-slack", name, "slack")).toEqual([]);
     expect(await findStubLogs("consumer", name, "sendgrid")).toEqual([]);
   }, 420_000);

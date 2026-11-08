@@ -53,7 +53,7 @@
 | 19 | CDK: Lambda タスクの `Retry` に `InjectedFailureError` / `ValidationError` が含まれない | UT | 異常系（設定ずれの検出） |
 | 20 | `failAt` なしの実行が `SUCCEEDED` になり、配信対象の件数のメール送信・S3 のファイル・BigQuery / Cuenote FC への出力がそろう | IT | 正常系 |
 | 21 | `failAt: "dataSync"` の実行が `FAILED` になり、S3 にファイルが残り、BigQuery / Cuenote FC へは出力されず、Slack スタブのログが出る | IT | 準正常系 |
-| 22 | `failAt: "consumer"` の実行が `SUCCEEDED` のまま、DLQ に配信対象の件数のメッセージが届き、Slack スタブのログは出ない | IT | 準正常系 |
+| 22 | `failAt: "consumer"` の実行が `SUCCEEDED` のまま、DLQ に配信対象の件数のメッセージが届き、実行の失敗としての Slack スタブのログ（実行名を含むもの）は出ない | IT | 準正常系 |
 | 23 | `dev` で Schedule が実行を起動し、`FAILED` で通知が出る | 手動 | 正常系 |
 | 24 | Consumer: 失敗したメッセージと同じグループの後続は送らずに失敗として返し、別グループは送る | UT | 準正常系 |
 | 25 | `failAt: "enqueue"` の実行が `FAILED` になり、Slack スタブのログに実行 ARN と `FAILED` が出て、キューにも DLQ にもメッセージが積まれない | IT | 準正常系 |
@@ -99,9 +99,14 @@
 | 65 | `local` で、Scheduler の DLQ へ 1 件送ると `NumberOfMessagesSent` のデータが出て、アラームが約 5 分後に `ALARM` になり、さらに約 11 分後に `OK` に戻る。LocalStack はこの状態変化を EventBridge に出さない。同じ形のイベントを `put-events` で入れると、rule を経て Slack スタブのログが出る（09「LocalStack での検証結果」。#101） | 手動 | 正常系 |
 | 66 | `dev` で、Schedule のターゲットを存在しないステートマシンへ一時的に向けると、呼び出しが DLQ に届き、アラームが `ALARM` になり、Slack スタブのログにアラーム名が出る。DLQ のメッセージの属性（`ERROR_CODE`・`EXHAUSTED_RETRY_CONDITION`）と、届いたイベントの形を記録する（#101。結果は 09「`dev` での検証結果」） | 手動 | 異常系 |
 | 67 | CDK: 実行が始まらない日のアラームは、`AWS/Scheduler` の `InvocationAttemptCount`（ディメンションは SSM の Schedule group 名）の 1 日の合計が 1 未満で `ALARM` にし、データの無い日も `ALARM` にする。壁時計の窓（`Asia/Tokyo`）で数え、作ってから 2,880 分は評価しない。rule は、このアラームの `ALARM` への変化だけを Slack 通知 Lambda へ流す（#109） | UT | 正常系 |
-| 68 | CDK: 実行が始まらない日のアラームの前提が崩れていない。`AWS/States` で数えない（手動の実行が欠けを隠す）、Schedule は 1 本だけ（group 単位でしか数えられない）、1 日の区切りは Schedule と同じタイムゾーン、2 つのアラームの rule が自分のアラームだけを指す（04「リトライ」） | UT | 異常系（設定ずれの検出） |
+| 68 | CDK: 実行が始まらない日のアラームの前提が崩れていない。`AWS/States` で数えない（手動の実行が欠けを隠す）、Schedule は 1 本だけ（group 単位でしか数えられない）、1 日の区切りは Schedule と同じタイムゾーン、各アラームの rule が自分のアラームだけを指す（04「リトライ」） | UT | 異常系（設定ずれの検出） |
 | 69 | `local` で、実行が始まらない日のアラームの `ALARM` への変化を `put-events` で入れると、rule を経て Slack スタブのログにアラーム名が出る。同じアラームの `OK` と、関係の無いアラーム名の `ALARM` は出ない（評価は確かめられない。09「LocalStack での検証結果」。#109） | 手動 | 正常系 |
 | 70 | `dev` で、Scheduler が起動を試みなかった日の後にアラームが `ALARM` になり、Slack スタブのログにアラーム名が出る。起動を試みた日の後は `OK` になる。`InvocationAttemptCount` のディメンション・値、壁時計の窓の区切り、ウォームアップ中の状態、届いたイベントの形を記録する（#109 ではウォームアップ中の状態だけを確かめ、評価は費用のため見送った。残りは #116。結果は 09「`dev` での検証結果」） | 手動 | 異常系 |
+| 71 | CDK: メール送信キューの DLQ のアラームは、`ApproximateNumberOfMessagesVisible`（ディメンションは SSM の `dlq/name`）の 5 分間の最大が 1 以上で `ALARM` にし、データの無い期間は `ALARM` にしない。rule は、このアラームの `ALARM` への変化だけを Slack 通知 Lambda へ流す（#135） | UT | 正常系 |
+| 72 | CDK: メール送信キューの DLQ のアラームは、送信数（`NumberOfMessagesSent`）で数えない。redrive で DLQ へ移ったメッセージは送信数に数えられないため（04「リトライ」の「メールの送信の失敗の通知」。#135） | UT | 異常系（設定ずれの検出） |
+| 73 | 通知 Lambda: メール送信キューの DLQ のアラームも、アラーム名で絞らず、同じ形でアラーム名と理由を Slack スタブへ出す（#135） | UT | 正常系 |
+| 74 | `local` で、`failAt: "consumer"` の実行の後、メール送信キューの DLQ のアラームが `ALARM` になる。DLQ の 2 つのメトリクス（`ApproximateNumberOfMessagesVisible`・`NumberOfMessagesSent`）の出方と、DLQ を空にした後のアラームの状態を記録する。同じ形のイベントを `put-events` で入れると、rule を経て Slack スタブのログが出る（09「LocalStack での検証結果」。#135） | 手動 | 準正常系 |
+| 75 | `dev` で、`failAt: "consumer"` の実行の後、メール送信キューの DLQ のアラームが `ALARM` になり、Slack スタブのログにアラーム名が出る。実行の終了から通知までの時間と、DLQ の `NumberOfMessagesSent` を記録する。DLQ を空にすると `OK` に戻る（09「`dev` での検証結果」。#135） | 手動 | 準正常系 |
 
 次のケースは、確かめている流れを 03「処理の流れ」の図で追える。
 

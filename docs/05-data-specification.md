@@ -117,8 +117,9 @@ Terraform が書き、CDK のスタックがデプロイ時に読む（下記「
 | `queue/url` | メール送信キューの URL | 投入 Lambda の環境変数 `QUEUE_URL` |
 | `queue/arn` | メール送信キューの ARN | Consumer のイベントソース |
 | `dlq/arn` | DLQ の ARN | 参照のみ（確認用） |
+| `dlq/name` | DLQ のキュー名 | メール送信キューの DLQ のアラーム（メトリクスのディメンション `QueueName`。#135） |
 | `scheduler-dlq/arn` | Scheduler の DLQ の ARN | Schedule 定義の `DeadLetterConfig` |
-| `scheduler-dlq/name` | Scheduler の DLQ のキュー名 | DLQ のアラーム（メトリクスのディメンション `QueueName`） |
+| `scheduler-dlq/name` | Scheduler の DLQ のキュー名 | Scheduler の DLQ のアラーム（メトリクスのディメンション `QueueName`） |
 | `bucket/name` | 連携ファイルの出力先バケット名 | データ連携 Lambda の環境変数 `BUCKET_NAME` |
 | `schedule-group/name` | Schedule group 名 | Schedule 定義 |
 | `role/enqueue/arn` | 投入 Lambda の実行ロール ARN | 投入 Lambda |

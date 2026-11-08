@@ -109,6 +109,23 @@ describe("notifySlack", () => {
         },
       ]);
     });
+
+    // 通知 Lambda はアラーム名で絞らない。どのアラームを流すかは rule が決める（#135 のアラームで rule だけを足した）
+    it("メール送信キューの DLQ のアラームも、同じ形でアラーム名と理由を Slack スタブへ出す", async () => {
+      const { deps, slack } = setup();
+      const mailDlqAlarm = alarmEvent();
+      mailDlqAlarm.detail.alarmName = "serverless-practice-app-dev-mail-dlq";
+
+      await notifySlack(mailDlqAlarm, deps);
+
+      expect(slack()).toEqual([
+        expect.objectContaining({
+          message: "アラームを通知しました（スタブ）",
+          alarmName: "serverless-practice-app-dev-mail-dlq",
+          reason: ALARM_REASON,
+        }),
+      ]);
+    });
   });
 
   describe("準正常系", () => {

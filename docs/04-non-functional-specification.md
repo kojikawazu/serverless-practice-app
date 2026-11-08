@@ -43,7 +43,7 @@
 |---|---|---|---|
 | EventBridge Scheduler → ステートマシン | Scheduler の再試行 | `StartExecution` の呼び出しの失敗 | 最大 185 回・24 時間（`RetryPolicy`。サービスの既定と同じ値を CDK で明示）。やり直しを使い切った呼び出しは DLQ（SQS 標準キュー）へ送り、アラームで通知する（下記「起動の失敗の通知」） |
 | Step Functions の Lambda タスク | `Retry` | `Lambda.ServiceException` / `Lambda.AWSLambdaException` / `Lambda.SdkClientException` / `Lambda.TooManyRequestsException`。投入タスクのみ `EnqueuePartialFailureError` も対象 | 最大 2 回、初回 2 秒、倍率 2 |
-| Consumer | SQS の再配信 | 失敗したメッセージすべて | 受信 3 回で DLQ（`maxReceiveCount: 3`） |
+| Consumer | SQS の再配信 | 失敗したメッセージすべて | 受信 3 回で DLQ（`maxReceiveCount: 3`）。DLQ にメッセージがあればアラームで通知する（下記「メールの送信の失敗の通知」） |
 | Slack 通知 Lambda | 非同期呼び出しの再試行 | 関数のエラー | Lambda 既定（最大 2 回） |
 | データ連携 Lambda | 非同期呼び出しの再試行 | — | **0 回**。同じタスクトークンで処理が二重に走らないようにする。やり直しは `DataSync` タスクの `Retry`（上の行）に任せる。関数が `SendTaskFailure` で返したエラー名にも同じ `Retry` が効く |
 
@@ -88,7 +88,21 @@
 - **`local` では評価を確かめられない**: LocalStack は、CLI で直接作ればウォームアップと壁時計の窓を受け付けるが評価に反映しないように見え、CloudFormation で作ると 2 つの設定そのものを落とす。Scheduler が起動しないため `InvocationAttemptCount` も出ない（09「LocalStack での検証結果」）。`local` では rule → 通知 Lambda の経路だけを確かめる
 - **`dev` で観測したのはウォームアップ中の状態だけ**（実 AWS、2026-10-23、#109）: CDK で作った直後のアラームは、`describe-alarms` で `StateValue: INSUFFICIENT_DATA`・`StateReason: Alarm is in Warm-Up`・`EvaluationState: IN_WARM_UP` だった（作ってから約 5 分後に 1 回読んだだけで、ウォームアップの間ずっとそのままかは見ていない）。壁時計の窓とウォームアップの設定も、CDK で書いた値のまま返った（09「`dev` での検証結果」）
 - **未観測**: 次はどれも公式の記述によるもので、観測していない。`dev` の定時の起動で `InvocationAttemptCount` がディメンション `ScheduleGroup` で出ること、壁時計の窓が日本時間の 0 時で区切ること、起動を試みた日の後に `OK`・試みなかった日の後に `ALARM` になり Slack 通知 Lambda まで届くこと。評価を見るには `dev` を約 3.5 日立てる必要があり、その間 LMI の費用（約 $11）がかかるため、`dev` での観測を見送った。費用をかけずに立てる手段ができたら観測する（#116）
-- **アラームの費用**: 標準の解像度のメトリクスのアラームが 1 つ増え、計 2 つ（09「費用」）
+- **アラームの費用**: 標準の解像度のメトリクスのアラームが 1 つ増える（09「費用」）
+
+**メールの送信の失敗の通知**（#135。2026-11-08 に判断）: Consumer が最大受信回数まで失敗したメッセージは DLQ へ移るが、実行は `SUCCEEDED` のまま終わっており、状態変化イベントの通知（F-5）には乗らない（元資料のリスク 1）。元資料の改善提案 1 のとおり、DLQ のメッセージ数をアラームで見て、上の 2 つと同じ形（EventBridge rule → Slack 通知 Lambda）で通知する。
+
+| 項目 | 値 | 理由 |
+|---|---|---|
+| メトリクス | メール送信キューの DLQ の `ApproximateNumberOfMessagesVisible`（ディメンション `QueueName`。SSM の `dlq/name`）の 5 分間の最大 | 下記「送信数では数えられない」 |
+| 条件 | 1 以上で `ALARM`。データの無い期間は `ALARM` にしない（`notBreaching`） | DLQ にメッセージが無いことを拾うアラームではないため |
+| EventBridge rule | このアラームの `ALARM` への変化を Slack 通知 Lambda へ流す。上の 2 つの rule とは別に作る | 通知 Lambda はアラーム名で分岐しないため、Lambda の変更は要らない |
+
+- **送信数では数えられない**: Scheduler の DLQ のアラームは送信数（`NumberOfMessagesSent`）で数えるが、メール送信キューの DLQ には redrive（`maxReceiveCount` 超え）でメッセージが移る。公式によると、redrive で移ったメッセージは `NumberOfMessagesSent` に数えられず、公式は DLQ の監視に `ApproximateNumberOfMessagesVisible` を勧めている（[CloudWatch アラーム解説](guides/cloudwatch.md#送信数で数えるかメッセージ数で数えるか)）。送信数で作ると、Consumer の失敗では `ALARM` にならない。CDK の UT で、送信数に戻させないよう固定する
+- **DLQ を空にするまで `ALARM` のまま**: メッセージ数で数えるため、DLQ にメッセージが残る間は `ALARM` が続き、その間の次の失敗は通知されない（アラームの通知は状態が変わったときだけ）。DLQ にメッセージが残っていることは「まだ対応していない失敗がある」状態を表すため、このままにする。通知を受けたら DLQ のメッセージで失敗した実行名・配信対象を確かめ、対応したら DLQ を空にする（03「操作方針」）。空にしなければ、保持期間（4 日。下記「保持期間」）で消えるまで `ALARM` が続く
+- **空にした後に `OK` に戻ることは未観測**: メトリクスが 0 になれば `OK` に戻るのは、評価の仕組み（公式）からの推論。LocalStack では、空にしてメトリクスが 15 分以上 0 になっても `ALARM` のまま戻らなかった（09「LocalStack での検証結果」）。実 AWS では `dev` で確かめる（08 #75）。戻らないなら、2 回目以降の失敗は通知されない
+- **通知は実行の終了より遅れる**: 実行は投入の後すぐ `SUCCEEDED` で終わり、通知は Consumer の再配信を受信 3 回分繰り返して DLQ へ移った後、さらにアラームの評価を待ってから届く。実行の成否と通知がずれること自体が、元資料のリスク 1 の学びとして残る（03「メールの送信の失敗」の図）
+- **アラームの費用**: 標準の解像度のメトリクスのアラームが 1 つ増え、計 3 つ（09「費用」）
 
 **公式の推奨との違い**（#90。2026-10-18 に判断）: Lambda タスクの `Retry` は、公式の[ベストプラクティス](https://docs.aws.amazon.com/step-functions/latest/dg/sfn-best-practices.html)と CDK の既定（`retryOnServiceExceptions`）に合わせず、上の表のままにする。CDK の UT で対象を固定している。
 
@@ -116,7 +130,7 @@
 | 投入 Lambda の注入エラー | キューへ何も積まずに失敗し、実行が `FAILED` になり通知が出る |
 | `SendMessageBatch` の一部失敗 | 失敗した ID をログに出して投入 Lambda を失敗させる。Retry で全件を送り直すが、重複排除 ID が決定的なため重複しない |
 | Lambda の一時的なエラー | Step Functions の `Retry` で再実行する。尽きたら実行が `FAILED` になる |
-| Consumer での失敗（注入・本文不正） | その 1 件だけを再配信させる。3 回で DLQ へ移る。**通知は出ない**（元資料のリスク 1） |
+| Consumer での失敗（注入・本文不正） | その 1 件だけを再配信させる。3 回で DLQ へ移る。実行は `SUCCEEDED` のままで、DLQ のアラームで遅れて通知が出る（上記「メールの送信の失敗の通知」） |
 | データ連携の途中失敗 | 実行が `FAILED` になり通知が出る。前段の書き込み（S3 等）は残る（元資料のリスク 4） |
 | データ連携 Lambda が結果を返せない（タスクトークンが読めない・`SendTaskFailure` も失敗した・関数が落ちた） | エラーログを出して終える。`DataSync` がハートビートかタスクのタイムアウトで失敗し、実行が `FAILED` になり通知が出る。待ち続けず、判定できない結果を成功にも丸めない |
 | ステートマシンのタイムアウト | 実行が `TIMED_OUT` になり通知が出る |

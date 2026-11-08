@@ -86,7 +86,7 @@ sequenceDiagram
 3. `functions/src/handlers/consumer.ts:37` — 本文を `JSON.parse` してから `mailMessageSchema` で検証する。JSON として読めない（`SyntaxError`）・形が違う（`ValidationError`）・注入された失敗（`InjectedFailureError`）は、どれも `:86` で捕まえて、そのメッセージだけを失敗にする
 4. `functions/src/handlers/consumer.ts:45` — 送信内容（`OutgoingMail`）に詰め替えて SendGrid スタブへ渡す。`simulateFailure` などキュー側の項目は渡さない
 
-失敗したメッセージは受信 3 回で DLQ へ移り、Step Functions の実行の成否には影響しない（[SQS FIFO 解説](../../guides/sqs-fifo.md#consumer-の失敗は通知に乗らない)）。
+失敗したメッセージは受信 3 回で DLQ へ移り、Step Functions の実行の成否には影響しない（[SQS FIFO 解説](../../guides/sqs-fifo.md#consumer-の失敗は実行の成否に乗らない)）。
 
 ## データ連携（dataSync）
 
@@ -159,7 +159,7 @@ sequenceDiagram
 
 ### ステップ詳細
 
-1. `functions/src/handlers/notify-slack.ts:37` — `parseInput` ではなく `safeParse` を直接使う。対象外のイベントを `ValidationError` にせず、警告ログで済ませるため。投げても同じイベントを再試行で受け直すだけで、結果は変わらない
-2. `functions/src/handlers/notify-slack.ts:45` — `source` で分ける。判別 union（`notificationEventSchema`）を通った後なので、分岐の中では型が絞り込まれている
-3. `functions/src/handlers/notify-slack.ts:72` — `error` / `cause` は、項目が無い場合も `null` にそろえる。`TIMED_OUT` / `ABORTED` では値が無いことがある（07「[状態変化イベント](../../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」）
-4. `functions/src/handlers/notify-slack.ts:75` / `:100` — 通知の失敗はエラーログを出してから投げ直す
+1. `functions/src/handlers/notify-slack.ts:38` — `parseInput` ではなく `safeParse` を直接使う。対象外のイベントを `ValidationError` にせず、警告ログで済ませるため。投げても同じイベントを再試行で受け直すだけで、結果は変わらない
+2. `functions/src/handlers/notify-slack.ts:46` — `source` で分ける。判別 union（`notificationEventSchema`）を通った後なので、分岐の中では型が絞り込まれている
+3. `functions/src/handlers/notify-slack.ts:73` — `error` / `cause` は、項目が無い場合も `null` にそろえる。`TIMED_OUT` / `ABORTED` では値が無いことがある（07「[状態変化イベント](../../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」）
+4. `functions/src/handlers/notify-slack.ts:76` / `:101` — 通知の失敗はエラーログを出してから投げ直す

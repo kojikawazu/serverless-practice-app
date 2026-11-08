@@ -378,6 +378,41 @@ describe("BatchStack（local）", () => {
         Targets: [Match.objectLike({ Arn: Match.anyValue() })],
       });
     });
+
+    it("#135: メール送信キューの DLQ のアラームは、DLQ のメッセージ数の 5 分間の最大が 1 以上で ALARM にし、データの無い期間は ALARM にしない", () => {
+      template.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: "serverless-practice-app-local-mail-dlq",
+        Namespace: "AWS/SQS",
+        MetricName: "ApproximateNumberOfMessagesVisible",
+        Dimensions: [
+          {
+            Name: "QueueName",
+            Value: ssmRef(json, "/serverless-practice-app/local/dlq/name"),
+          },
+        ],
+        Statistic: "Maximum",
+        Period: 300,
+        EvaluationPeriods: 1,
+        Threshold: 1,
+        ComparisonOperator: "GreaterThanOrEqualToThreshold",
+        TreatMissingData: "notBreaching",
+      });
+    });
+
+    it("#135: EventBridge rule は、メール送信キューの DLQ のアラームが ALARM になったことを Slack 通知へ流す", () => {
+      template.hasResourceProperties("AWS::Events::Rule", {
+        Name: "serverless-practice-app-local-mail-dlq-alarm",
+        EventPattern: {
+          source: ["aws.cloudwatch"],
+          "detail-type": ["CloudWatch Alarm State Change"],
+          detail: {
+            alarmName: [Match.anyValue()],
+            state: { value: ["ALARM"] },
+          },
+        },
+        Targets: [Match.objectLike({ Arn: Match.anyValue() })],
+      });
+    });
   });
 
   describe("異常系（設定ずれの検出）", () => {
@@ -389,8 +424,17 @@ describe("BatchStack（local）", () => {
       });
     });
 
-    it("#109: アラームは DLQ の送信数と、実行が始まらない日の 2 つだけ", () => {
-      template.resourceCountIs("AWS::CloudWatch::Alarm", 2);
+    // redrive（maxReceiveCount 超え）で DLQ へ移ったメッセージは NumberOfMessagesSent に数えられない（公式）。
+    // Scheduler の DLQ のアラームを写して送信数にすると、Consumer の失敗では ALARM にならない
+    it("#135: メール送信キューの DLQ のアラームは、送信数（NumberOfMessagesSent）ではなくメッセージ数で数える", () => {
+      template.hasResourceProperties("AWS::CloudWatch::Alarm", {
+        AlarmName: "serverless-practice-app-local-mail-dlq",
+        MetricName: "ApproximateNumberOfMessagesVisible",
+      });
+    });
+
+    it("#135: アラームは Scheduler の DLQ の送信数・実行が始まらない日・メール送信キューの DLQ の 3 つだけ", () => {
+      template.resourceCountIs("AWS::CloudWatch::Alarm", 3);
     });
 
     // ExecutionsStarted は手動の実行（batch.sh run）も数えるため、その日に手動の実行があると定時の起動の欠けが隠れる
@@ -426,7 +470,7 @@ describe("BatchStack（local）", () => {
       });
     });
 
-    it("#109: 2 つのアラームの rule は、それぞれ自分のアラームだけを流す（取り違えない）", () => {
+    it("#109・#135: 3 つのアラームの rule は、それぞれ自分のアラームだけを流す（取り違えない）", () => {
       expect(
         ruleAlarmNames(
           json,
@@ -451,6 +495,13 @@ describe("BatchStack（local）", () => {
             json,
             "serverless-practice-app-local-scheduler-missed-run",
           ),
+        },
+      ]);
+      expect(
+        ruleAlarmNames(json, "serverless-practice-app-local-mail-dlq-alarm"),
+      ).toEqual([
+        {
+          Ref: alarmLogicalId(json, "serverless-practice-app-local-mail-dlq"),
         },
       ]);
     });
@@ -573,12 +624,13 @@ describe("BatchStack（local）", () => {
       }
     });
 
-    it("Lambda を外から呼べるのは、EventBridge の 3 つの rule から Slack 通知への呼び出しだけ", () => {
-      template.resourceCountIs("AWS::Lambda::Permission", 3);
+    it("Lambda を外から呼べるのは、EventBridge の 4 つの rule から Slack 通知への呼び出しだけ", () => {
+      template.resourceCountIs("AWS::Lambda::Permission", 4);
       const permissions = Object.values(json.Resources).filter(
         (r) => r.Type === "AWS::Lambda::Permission",
       );
       expect(permissions.map((p) => p.Properties.Principal)).toEqual([
+        "events.amazonaws.com",
         "events.amazonaws.com",
         "events.amazonaws.com",
         "events.amazonaws.com",
@@ -603,10 +655,11 @@ describe("BatchStack（dev）", () => {
     const defaults = Object.values(devJson.Parameters).flatMap((p) =>
       p.Default === undefined ? [] : [p.Default],
     );
-    // local の 13 個（Scheduler の DLQ の ARN・名前を含む）に、LMI のキャパシティプロバイダの ARN を足した 14 個
+    // local の 14 個（Scheduler の DLQ の ARN・名前、メール送信キューの DLQ の名前を含む）に、
+    // LMI のキャパシティプロバイダの ARN を足した 15 個
     expect(
       defaults.filter((name) => name.startsWith("/serverless-practice-app/")),
-    ).toHaveLength(14);
+    ).toHaveLength(15);
     expect(defaults.filter((name) => name.includes("/local/"))).toEqual([]);
   });
 

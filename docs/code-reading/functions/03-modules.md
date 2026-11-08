@@ -22,7 +22,7 @@
 | `enqueue` | `functions/src/handlers/enqueue.ts:70` | 投入の本体。検証 → `sendMessages`（`:95`）で 10 件ずつ送る |
 | `consume` | `functions/src/handlers/consumer.ts:65` | Consumer の本体。1 件ずつ `processRecord`（`:33`）を呼び、失敗をグループ単位で伝える |
 | `dataSync` | `functions/src/handlers/data-sync.ts:97` | データ連携の本体。`exportRecipients`（`:141`）→ `hold`（`:186`）→ `SendTaskSuccess`。失敗は `reportFailure`（`:215`） |
-| `notifySlack` | `functions/src/handlers/notify-slack.ts:33` | Slack 通知の本体。`notifyExecutionFailure`（`:60`）と `notifyAlarm`（`:89`）に分ける |
+| `notifySlack` | `functions/src/handlers/notify-slack.ts:34` | Slack 通知の本体。`notifyExecutionFailure`（`:61`）と `notifyAlarm`（`:90`）に分ける |
 | `EnqueueDeps` などの `*Deps` | 各 handler の先頭 | 本体が受け取る依存の型。テストはこの形で偽物・本物を渡す |
 
 ### lib
@@ -41,7 +41,7 @@
 | `taskInputSchema` / `dataSyncTaskInputSchema` | `functions/src/schemas/execution.ts:43` / `:65` | Step Functions から渡るタスク入力。未知のキーを拒否する（`strictObject`） |
 | `mailMessageSchema` | `functions/src/schemas/mail-message.ts:13` | SQS に積むメールメッセージの本文。宛先は `@example.com` に限る |
 | `sqsEventSchema` | `functions/src/schemas/sqs-event.ts:8` | Consumer が受け取る SQS イベントのうち、使う項目だけ |
-| `notificationEventSchema` | `functions/src/schemas/notification-event.ts:9` | `source` で見分ける判別 union。`executionStatusEventSchema`（`execution-status-event.ts:26`）と `alarmStateChangeEventSchema`（`alarm-state-change-event.ts:12`） |
+| `notificationEventSchema` | `functions/src/schemas/notification-event.ts:9` | `source` で見分ける判別 union。`executionStatusEventSchema`（`execution-status-event.ts:26`）と `alarmStateChangeEventSchema`（`alarm-state-change-event.ts:13`） |
 
 ### types・errors・stubs
 
@@ -50,7 +50,7 @@
 | `RecipientRepository` | `functions/src/types/recipient.ts:16` | 配信対象を取得する口。`MySqlStub`（`stubs/mysql-stub.ts:15`）が固定の 3 件を返す |
 | `MailSender` | `functions/src/types/mail.ts:17` | メールを送る口。`SendGridStub`（`stubs/sendgrid-stub.ts:7`） |
 | `ExportWriter` | `functions/src/types/export.ts:7` | データ連携の書き出し先の口。`BigQueryStub`・`CuenoteFcStub` の 2 つが実装する |
-| `FailureNotifier` | `functions/src/types/notification.ts:33` | 失敗を知らせる口（`notify` と `notifyAlarm`）。`SlackStub`（`stubs/slack-stub.ts:11`） |
+| `FailureNotifier` | `functions/src/types/notification.ts:35` | 失敗を知らせる口（`notify` と `notifyAlarm`）。`SlackStub`（`stubs/slack-stub.ts:11`） |
 | `ValidationError` | `functions/src/errors/validation-error.ts:7` | 入力がスキーマに合わない。`Retry` の対象にしない |
 | `InjectedFailureError` | `functions/src/errors/injected-failure-error.ts:7` | `failAt` で注入した失敗。`Retry` の対象にしない |
 | `EnqueuePartialFailureError` | `functions/src/errors/enqueue-partial-failure-error.ts:6` | `SendMessageBatch` の一部が失敗した。`Retry` の対象にする |
