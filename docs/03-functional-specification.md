@@ -114,6 +114,28 @@ Lambda の呼び出しが一時的なエラーで失敗しても、`Retry` で�
 
 ![一時的なエラーを Retry で吸収するシーケンス図。Step Functions が投入 Lambda を呼び、Lambda.TooManyRequestsException などの一時的なエラーが返る。Retry の対象なので待ってから呼び直し、2 回目は MySQL スタブから取得して SQS FIFO へ積み、件数を返す。前の呼び出しで積めていた分は重複排除 ID により 5 分以内なら重複しない。以降は正常系と同じく SUCCEEDED。Retry を使い切ると FAILED になり、Slack へ通知される。実行時の動きは未観測](images/sequences/retry-transient.drawio.svg)
 
+### 準正常系
+
+想定内の不正な入力・一部の失敗を、決めたとおりに扱う流れ。`failAt` で注入する失敗は、下の「[実行の失敗](#実行の失敗)」で扱う。
+
+#### 実行入力の検証エラー
+
+実行入力がタスク入力のスキーマに合わないと、投入 Lambda が `ValidationError` で失敗する。`Retry` の対象外のため、やり直さずに `FAILED` になり、Slack へ通知される（04「[リトライ](04-non-functional-specification.md#リトライ)」）。スキーマは未知のキーも拒否するため、`failat` のような綴り違いも通さない（07「[タスク入力](07-api-specification.md#タスク入力投入データ連携-lambda-共通)」）。実行と通知のエラー名は LocalStack の IT（08 #26）で確かめた。実 AWS では未観測。
+
+![実行入力の検証エラーのシーケンス図。開発者が failAt に未定義の値を付けて実行を始め、Step Functions が投入 Lambda をタスク入力で呼ぶ。タスク入力のスキーマに合わないため ValidationError が返る。Retry の対象外のため実行は FAILED になり、DataSync は動かない。状態変化イベントが rule を経て Slack 通知 Lambda に届き、エラー名 ValidationError を Slack スタブへ通知する。LocalStack の IT で確かめ、実 AWS では未観測](images/sequences/validation-error.drawio.svg)
+
+#### 投入の一部の失敗を `Retry` で送り直す
+
+`SendMessageBatch` の一部が失敗すると、投入 Lambda は残りを送り切ってから `EnqueuePartialFailureError` を投げる。投入タスクだけがこのエラーを `Retry` し、やり直しでは全件を送り直す。送れていた分は重複排除 ID が同じため、5 分以内なら重複しない（上の「[投入 Lambda](#投入-lambdaenqueue)」・05「[メールメッセージ](05-data-specification.md#メールメッセージmailmessage)」）。SQS の一部の失敗は注入できないため、実行時の動きは観測していない。
+
+![投入の一部の失敗を Retry で送り直すシーケンス図。投入 Lambda が MySQL スタブから取得して SendMessageBatch で送り、応答の一部の項目が Failed になる。残りのバッチも送り切ってから EnqueuePartialFailureError を投げる。投入タスクだけ Retry の対象なので、Step Functions は待ってから呼び直し、投入 Lambda は全件を送り直す。前に送れた分は重複排除 ID が同じため 5 分以内なら重複しない。件数を返して以降は正常系と同じく SUCCEEDED。Retry を使い切ると FAILED になり Slack へ通知される。実行時の動きは未観測](images/sequences/enqueue-partial-failure.drawio.svg)
+
+#### 本文が不正なメッセージ（Consumer）
+
+Consumer Lambda は、本文が不正なメッセージの 1 件だけを失敗にし、他は送る（部分バッチ応答）。不正な本文は何度受け取っても失敗するため、最大受信回数に達すると DLQ へ移る（上の「[Consumer Lambda](#consumer-lambdaconsumer)」）。投入 Lambda は本文を型どおりに組み立てるため、`failAt` では起こせない。1 件ずつの扱いは UT（08 #11・#24）で確かめた。不正な本文を実際のキューに置いた動きは観測していない。
+
+![本文が不正なメッセージのシーケンス図。SQS FIFO がイベントソースで最大 5 件を Consumer Lambda に渡し、うち 1 件の本文が不正。Consumer Lambda は 1 件ずつ検証し、不正な 1 件を失敗にしてエラーログを出し、残りを SendGrid スタブへ送る。同じグループの後続は送らずに失敗として返す。batchItemFailures で失敗した ID を返し、成功した分はキューから消える。失敗した分は可視性タイムアウトの後に再配信され、不正な本文は毎回失敗し、最大受信回数に達すると DLQ へ移る。Slack へは通知しない。不正な本文を実際のキューに置いた動きは未観測](images/sequences/consumer-invalid-body.drawio.svg)
+
 ### 実行の失敗
 
 実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、状態変化イベントが EventBridge rule を経て Slack 通知 Lambda に届く（02「F-5」）。メールの送信の失敗だけは Step Functions の外で起き、通知されない。
