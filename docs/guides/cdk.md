@@ -55,7 +55,7 @@ Lambda のコード: NodejsFunction が synth の中で esbuild によりバン�
 
 Terraform の土台が作った ARN・名前・URL は、SSM パラメータ（`/serverless-practice-app/<stage>/...`）に書き出されている（[05「SSM パラメータ」](../05-data-specification.md#ssm-パラメータ)）。CDK はそれを `ssm.StringParameter.valueForStringParameter` で読む。
 
-公式によると、この関数は合成の時点では値を読まず、**デプロイの時点で解決される**トークンを返す（公式「StringParameter」）。このため、合成したテンプレートには値ではなく SSM の名前が残る。このプロジェクトのテストが、合成したテンプレートの `Parameters` の `Default` を読んで SSM の名前を確かめているのは、この仕組みによる。
+公式によると、この関数は合成の時点では値を読まず、**デプロイの時点で解決される**トークンを返す（公式「StringParameter」）。このため、合成したテンプレートには値ではなく SSM の名前が残る。このプロジェクトのテストが、合成したテンプレートの `Parameters` の `Default` を読んで SSM の名前を確かめているのは、この仕組みによる。値はデプロイのたびに読み直されるため、Terraform が値を変えたら CDK もデプロイし直す（[SSM Parameter Store 解説](ssm.md#値が変わったらcdk-のスタックを更新し直す)）。
 
 Consumer のタイムアウトは `Token.asNumber` で数値として渡す。値の正本は Terraform にあり、CDK は値を持たない（04 の「連動するパラメータ」）。
 
