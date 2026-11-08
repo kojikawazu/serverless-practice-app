@@ -8,7 +8,7 @@ export const failAtSchema = z.enum([
   "enqueue",
   /** データ連携 Lambda が S3 へ書いた後に失敗する。実行は FAILED で通知が出る */
   "dataSync",
-  /** Consumer が全メッセージで失敗する。実行は SUCCEEDED のまま、メッセージは DLQ へ移る */
+  /** Consumer が全メッセージで失敗する。実行は SUCCEEDED のまま、メッセージは DLQ へ移り、DLQ のアラームで通知が出る */
   "consumer",
 ]);
 

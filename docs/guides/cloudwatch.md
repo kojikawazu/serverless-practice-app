@@ -55,7 +55,7 @@ AWS のサービスは、動いた結果を数値（**メトリクス**）とし
 | 評価期間（`EvaluationPeriods`） | 直近の何個のデータポイントを見るか（N） |
 | アラームにするデータポイント数（`DatapointsToAlarm`） | N 個のうち、何個が閾値を超えたら `ALARM` にするか（M）。連続でなくてよい |
 
-M と N を違う値にしたものを「M out of N」のアラームと呼ぶ。このプロジェクトの 2 つのアラームは、どちらも N = 1（直近の 1 個だけを見る）。
+M と N を違う値にしたものを「M out of N」のアラームと呼ぶ。このプロジェクトの 3 つのアラームは、どれも N = 1（直近の 1 個だけを見る）。
 
 期間が 1 分以上なら、アラームは**毎分**評価される。期間 5 分・評価期間 1 なら、5 分目の終わりに 1〜5 分目のデータで評価し、6 分目の終わりに 2〜6 分目で評価する（公式）。期間 × 評価期間が 1 日を超えるアラームは、1 時間に 1 回の評価になる（公式）。
 
@@ -104,18 +104,20 @@ M と N を違う値にしたものを「M out of N」のアラームと呼ぶ�
 
 ## このプロジェクトで使う理由
 
-元資料の構成は、**実行が始まった後の失敗**しか通知に乗らない（ステートマシンの状態変化イベント → ルール → Slack 通知 Lambda）。実行が始まらない失敗は、状態変化イベントが出ないため、この経路では気づけない（[EventBridge 解説](eventbridge.md#通知が届かない経路が残っている)）。アラームは、その穴を埋めるために 2 つ置いている。
+元資料の構成は、**実行が失敗で終わったこと**しか通知に乗らない（ステートマシンの状態変化イベント → ルール → Slack 通知 Lambda）。実行が始まらない失敗と、実行が `SUCCEEDED` で終わった後の Consumer の失敗は、この経路では気づけない（[EventBridge 解説](eventbridge.md#通知が届かない経路が残っている)・元資料のリスク 1）。アラームは、その穴を埋めるために 3 つ置いている。
 
 | アラーム | 検知すること | 数えるメトリクス | 正本 |
 |---|---|---|---|
 | `…-scheduler-dlq` | Scheduler がステートマシンを起動できず、呼び出しを DLQ へ送った | `AWS/SQS` の `NumberOfMessagesSent`（Scheduler の DLQ）の 5 分間の合計が 1 以上 | 04「[リトライ](../04-non-functional-specification.md#リトライ)」の「起動の失敗の通知」（#101） |
 | `…-scheduler-missed-run` | Scheduler がその日（日本時間）の起動を 1 回も試みなかった（Schedule の無効化・削除など） | `AWS/Scheduler` の `InvocationAttemptCount`（group 単位）の 1 日の合計が 1 未満 | 04「[リトライ](../04-non-functional-specification.md#リトライ)」の「実行が始まらない日の通知」（#109） |
+| `…-mail-dlq` | メールの送信に失敗し続けたメッセージが、メール送信キューの DLQ にある（実行は `SUCCEEDED`） | `AWS/SQS` の `ApproximateNumberOfMessagesVisible`（メール送信キューの DLQ）の 5 分間の最大が 1 以上 | 04「[リトライ](../04-non-functional-specification.md#リトライ)」の「メールの送信の失敗の通知」（#135） |
 
-どちらも、`ALARM` への変化を EventBridge のルールで拾い、実行の失敗と同じ Slack 通知 Lambda へ渡す。ルールはアラームごとに 1 つ（07「[アラームの状態変化イベント](../07-api-specification.md#アラームの状態変化イベントeventbridge--slack-通知-lambda)」）。
+どれも、`ALARM` への変化を EventBridge のルールで拾い、実行の失敗と同じ Slack 通知 Lambda へ渡す。ルールはアラームごとに 1 つ（07「[アラームの状態変化イベント](../07-api-specification.md#アラームの状態変化イベントeventbridge--slack-通知-lambda)」）。
 
 ```text
 Scheduler ──起動に失敗──▶ DLQ ──NumberOfMessagesSent──▶ アラーム（dlq）        ─┐
 Scheduler ──起動を試みた回数（無ければデータ無し）──────▶ アラーム（missed-run）─┤
+Consumer ──受信 3 回で失敗──▶ DLQ ──メッセージ数──────────▶ アラーム（mail-dlq）  ─┤
                                                                                  ├─ ALARM への変化 ─▶ EventBridge ルール ─▶ Slack 通知 Lambda
 Step Functions ──FAILED / TIMED_OUT / ABORTED の状態変化イベント─────────────────┘
 ```
@@ -135,7 +137,7 @@ DLQ を見張るとき、候補は 2 つある。どちらを選ぶかで、2 �
 
 Scheduler の DLQ のアラームは、2 回目以降も通知するために送信数で数えている（04「[リトライ](../04-non-functional-specification.md#リトライ)」）。`dev` で、失敗を 3 回起こして 3 回とも通知されたこと、`ALARM` の 5 分後に `OK` に戻ったことを確かめた。`OK` に戻ったときの理由は「データが無い」ではなく、送信数 `0.0` のデータポイントだった（実 AWS、2026-10-21、#101。09「[`dev` での検証結果](../09-architecture-specification.md#dev-での検証結果)」）。
 
-**ただし、`NumberOfMessagesSent` は、`maxReceiveCount` を超えて自動で DLQ へ移ったメッセージを数えない**（公式。同じページの「Dead-letter queues (DLQs) and CloudWatch metrics」）。数えるのは `SendMessage` / `SendMessageBatch` で直接送られたものだけで、公式は DLQ の監視に `ApproximateNumberOfMessagesVisible` を勧めている。Scheduler の DLQ は Scheduler が送ってくるもので、`dev` で数えられることを確かめた（上記）。一方、メール送信キューの DLQ（Consumer の失敗）は redrive で自動で移るため、公式の記述どおりなら、**同じ形のアラームを流用すると、失敗しても `ALARM` にならない**（公式の記述からの推論で、観測していない。Consumer の DLQ のアラームは #135 で扱う）。
+**ただし、`NumberOfMessagesSent` は、`maxReceiveCount` を超えて自動で DLQ へ移ったメッセージを数えない**（公式。同じページの「Dead-letter queues (DLQs) and CloudWatch metrics」）。数えるのは `SendMessage` / `SendMessageBatch` で直接送られたものだけで、公式は DLQ の監視に `ApproximateNumberOfMessagesVisible` を勧めている。Scheduler の DLQ は Scheduler が送ってくるもので、`dev` で数えられることを確かめた（上記）。一方、メール送信キューの DLQ（Consumer の失敗）は redrive で自動で移るため、公式の記述どおりなら、**同じ形のアラームを流用すると、失敗しても `ALARM` にならない**。そのため `…-mail-dlq` は公式の勧めどおりメッセージ数で数え、DLQ を空にするまで `ALARM` のままになることを受け入れた（04「[リトライ](../04-non-functional-specification.md#リトライ)」の「メールの送信の失敗の通知」。#135）。CDK の UT で、送信数に戻させないよう固定している。
 
 ### 起きなかったことを数えるアラーム
 
@@ -156,10 +158,11 @@ Scheduler の DLQ のアラームは、2 回目以降も通知するために送
 
 EventBridge のイベントも、アクションと同じく状態が変わったときにだけ出る。
 
-- **DLQ のアラーム**: 送信数で数えるため、失敗のたびに `OK` → `ALARM` に変わり、毎回通知される（上記）
+- **Scheduler の DLQ のアラーム**: 送信数で数えるため、失敗のたびに `OK` → `ALARM` に変わり、毎回通知される（上記）
+- **メール送信キューの DLQ のアラーム**: メッセージ数で数えるため、DLQ を空にするまで `ALARM` のままで、その間の次の失敗は通知されない。DLQ を確かめて空にすれば `OK` に戻り、次の失敗でもう一度通知されるはずだが、未観測（LocalStack では、空にしても 15 分以上 `ALARM` のままだった。04「[リトライ](../04-non-functional-specification.md#リトライ)」・03「[操作方針](../03-functional-specification.md#操作方針)」）
 - **起きなかったことのアラーム**: 起動しない日が続く間は `ALARM` のままで、通知は最初の 1 日だけ。起動した日の後に `OK` に戻り、次の欠けでもう一度通知される。「まだ直っていない」状態を表すものとして、このままにしている（04「[リトライ](../04-non-functional-specification.md#リトライ)」）
 
-どちらのアラームも、ルールのイベントパターンで `ALARM` への変化だけを拾い、`OK` への変化は通知しない。
+どのアラームも、ルールのイベントパターンで `ALARM` への変化だけを拾い、`OK` への変化は通知しない。
 
 ### メトリクスは欠けうる
 

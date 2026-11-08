@@ -40,7 +40,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 
 - Lambda 4 種は共通で CloudWatch Logs への書き込み（`logs:CreateLogStream` / `logs:PutLogEvents`）を持つ。対象は自分のロググループに限る
 - ロググループは CDK が作るため、`logs:CreateLogGroup` は付けない
-- EventBridge rule から Slack 通知 Lambda への呼び出しは、関数側のリソースベースポリシーで許可する（CDK がターゲット設定時に付ける。ロールの変更ではない）。rule は 3 つ（実行の失敗・Scheduler の DLQ のアラーム・実行が始まらない日のアラーム）で、許可も rule ごとに 1 つずつ付く
+- EventBridge rule から Slack 通知 Lambda への呼び出しは、関数側のリソースベースポリシーで許可する（CDK がターゲット設定時に付ける。ロールの変更ではない）。rule は 4 つ（実行の失敗・Scheduler の DLQ のアラーム・実行が始まらない日のアラーム・メール送信キューの DLQ のアラーム）で、許可も rule ごとに 1 つずつ付く
 - `*` のアクション・`*` のリソースは使わない。例外は LMI のオペレーターの AWS 管理ポリシーで、Lambda が EC2 を操作するために公式が指定するもの。`dev` で検証する間だけ存在する
 - LMI のインスタンスのセキュリティグループは、受信を許さず、送信は HTTPS（443）だけにする
 - **`local` では権限の過不足を確かめられない**: LocalStack は既定で IAM のポリシーを評価しないため、権限が足りなくても動く。最小権限で動くことは `dev` で確かめる（#23）

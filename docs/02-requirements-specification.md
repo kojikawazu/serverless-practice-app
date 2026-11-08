@@ -47,7 +47,7 @@ EventBridge Scheduler が決まった時刻に Step Functions を起動する。
 
 Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わったら、EventBridge rule が Slack 通知 Lambda を呼び、Slack スタブへ通知内容を出す。
 
-- Consumer 側の失敗（DLQ 行き）は通知されない。元資料のリスク 1 をそのまま再現するためで、DLQ アラームは将来構成とする（09「将来構成」）
+- Consumer 側の失敗（DLQ 行き）も通知する（#135）。実行は `SUCCEEDED` で終わっているため、状態変化イベントでは通知されない（元資料のリスク 1）。メール送信キューの DLQ のメッセージ数のアラームが `ALARM` になったことを EventBridge rule が拾って、同じ Slack 通知 Lambda を呼ぶ（元資料の改善提案 1）。通知は実行の終了より遅れ、実行の成否と通知がずれる（04「リトライ」の「メールの送信の失敗の通知」）
 - Scheduler がステートマシンを起動できなかったときも通知する（#101）。実行が始まらないため状態変化イベントは出ない。Scheduler が呼び出しを DLQ へ送り、DLQ のアラームが `ALARM` になったことを EventBridge rule が拾って、同じ Slack 通知 Lambda を呼ぶ（04「リトライ」）
 - Schedule の無効化・削除など、Scheduler が起動を試みなかった日も通知する（#109）。実行も DLQ への送信も起きないため、上の 2 つには乗らない。Scheduler が起動を試みた回数を日本時間の 1 日ごとに数えるアラームが、0 回の日の翌 0 時過ぎに `ALARM` になり、同じ Slack 通知 Lambda を呼ぶ（04「リトライ」の「実行が始まらない日の通知」）
 
@@ -60,7 +60,7 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 | 省略 | なし | 実行は `SUCCEEDED`、全メッセージが送信される |
 | `enqueue` | 投入 Lambda（キューに積む前） | 実行は `FAILED`、Slack 通知が出る |
 | `dataSync` | データ連携 Lambda（S3 へ書いた後、BigQuery へ書く前） | 実行は `FAILED`、Slack 通知が出る。S3 にファイルだけ残る |
-| `consumer` | Consumer Lambda（全メッセージ） | 実行は `SUCCEEDED`、メッセージは DLQ へ移る。Slack 通知は出ない |
+| `consumer` | Consumer Lambda（全メッセージ） | 実行は `SUCCEEDED`、メッセージは DLQ へ移る。実行の失敗としての Slack 通知は出ず、DLQ のアラームの通知が遅れて出る |
 
 あわせて実行入力の `holdSeconds`（0〜1,200 秒）で、データ連携 Lambda が結果を返す前にその秒数だけ待つ。15 分を超える実行を再現するための遅延の注入で、定時起動では使わない（09「15 分を超える実行の再現」）。
 
@@ -89,7 +89,8 @@ Step Functions の実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった�
 - [x] `failAt` なしで実行すると、実行が `SUCCEEDED` になり、配信対象の件数だけメール送信スタブのログが出て、S3 に連携ファイルが 1 つでき、BigQuery / Cuenote FC スタブのログが出る → IT（08 #20）。`dev` でも確認（09「`dev` での検証結果」）
 - [x] `failAt: "enqueue"` で実行すると、実行が `FAILED` になり、キューにメッセージが積まれず、Slack スタブのログに実行 ARN と状態 `FAILED` が出る → IT（08 #25）。キューは、Consumer を止めた状態で直接受信して確かめる
 - [x] `failAt: "dataSync"` で実行すると、実行が `FAILED` になり、S3 に連携ファイルが残り、BigQuery / Cuenote FC スタブのログは出ず、Slack スタブのログが出る → IT（08 #21）。`dev` でも `FAILED` と Slack スタブのログを確認（09「`dev` での検証結果」）
-- [x] `failAt: "consumer"` で実行すると、実行は `SUCCEEDED` のまま、約 3 分後に配信対象の件数のメッセージが DLQ に移り、Slack スタブのログは出ない → IT（08 #22）
+- [x] `failAt: "consumer"` で実行すると、実行は `SUCCEEDED` のまま、約 3 分後に配信対象の件数のメッセージが DLQ に移り、実行の失敗としての Slack スタブのログは出ない → IT（08 #22）
+- [ ] `failAt: "consumer"` の実行の後、メール送信キューの DLQ のアラームが `ALARM` になり、Slack スタブのログにアラーム名が出る → #135（`dev` で確かめる。LocalStack はアラームの状態変化を EventBridge に出さない）
 - [x] `failAt` に未定義の値を渡すと、実行が `FAILED` になり、Slack スタブのログが出る → IT（08 #26）
 - [x] 同じ実行の投入 Lambda が Retry で再実行されても、5 分以内ならキューのメッセージは重複しない（UT で確認する） → UT（08 #2・#7）。重複を除くのは SQS FIFO の重複排除で、UT は同じ入力に同じ重複排除 ID を付けることを確かめる
 - [x] `dev` で、Schedule が定時に実行を起動し、`FAILED` の実行で Slack スタブのログが出る → 定時の Schedule（`cron`）が実行を起動することを確認（08 #33）。式の時・分だけを数分先へ一時的に変えて発火させたため、`cron(0 9 * * ? *)` そのものの発火は見ていない。`FAILED` で Slack スタブのログが出ることは、同じグループ・ロール・ターゲットの 1 回限りの Schedule（`at()`）の実行で確認（08 #23）。いずれも 09「`dev` での検証結果」

@@ -132,7 +132,7 @@ AWS のサービスが出すイベントは、アカウント・リージョン�
 | Schedule group | Terraform が作り、Schedule 定義（CDK）は SSM から名前で参照する | 09「[IaC の責務分担](../09-architecture-specification.md#iac-の責務分担)」 |
 | Scheduler の実行ロール | Terraform が作る。`states:StartExecution` を、このステートマシン 1 つにだけ許す。DLQ への `sqs:SendMessage` も、Scheduler の DLQ 1 つにだけ許す | 06「[認可](../06-security-specification.md#認可権限制御)」 |
 | Scheduler の DLQ | Terraform が SQS の標準キューで作り、Schedule の `DeadLetterConfig`（CDK）が SSM から参照する。起動に失敗した呼び出しを受ける（#101） | 04「[リトライ](../04-non-functional-specification.md#リトライ)」・07「[Scheduler の DLQ のメッセージ](../07-api-specification.md#scheduler-の-dlq-のメッセージ)」 |
-| ルール | 既定のイベントバスで 3 つ置く。このステートマシンの `FAILED` / `TIMED_OUT` / `ABORTED` と、2 つのアラーム（Scheduler の DLQ・実行が始まらない日）の `ALARM` への変化だけを拾い、どれも Slack 通知 Lambda へ渡す（アラームの仕組みは [CloudWatch アラーム解説](cloudwatch.md)）。CDK が通知先と同じスタックに置く | 02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」・07「[状態変化イベント](../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」「[アラームの状態変化イベント](../07-api-specification.md#アラームの状態変化イベントeventbridge--slack-通知-lambda)」 |
+| ルール | 既定のイベントバスで 4 つ置く。このステートマシンの `FAILED` / `TIMED_OUT` / `ABORTED` と、3 つのアラーム（Scheduler の DLQ・実行が始まらない日・メール送信キューの DLQ）の `ALARM` への変化だけを拾い、どれも Slack 通知 Lambda へ渡す（アラームの仕組みは [CloudWatch アラーム解説](cloudwatch.md)）。CDK が通知先と同じスタックに置く | 02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」・07「[状態変化イベント](../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」「[アラームの状態変化イベント](../07-api-specification.md#アラームの状態変化イベントeventbridge--slack-通知-lambda)」 |
 | ルールから Lambda への権限 | 関数側のリソースベースポリシー。CDK がターゲットの設定のときに付ける（IAM ロールは変えない） | 06「[認可](../06-security-specification.md#認可権限制御)」 |
 | Slack 通知 Lambda の失敗 | 対象外のイベントはエラーにせず正常に終える。通知そのものの失敗は投げ直し、Lambda の非同期の再試行（2 回）に任せる | 03「[Slack 通知 Lambda](../03-functional-specification.md#slack-通知-lambdanotify-slack)」・04「[リトライ](../04-non-functional-specification.md#リトライ)」 |
 
@@ -183,12 +183,12 @@ Slack 通知 Lambda も、届いたイベントを検証し直す（06「[入力
 |---|---|---|
 | Scheduler → ステートマシン（起動そのもの） | 24 時間・185 回で、DLQ が無ければ捨てられる（上記） | **#101 で手当てした。** DLQ へ送られた呼び出しを、DLQ のアラーム → ルール → Slack 通知 Lambda で通知する（04「[リトライ](../04-non-functional-specification.md#リトライ)」の「起動の失敗の通知」）。`dev` で端から端まで確かめた。実行ロールの権限の誤り（`AccessDeniedException`）とステートマシンの削除（`StateMachineDoesNotExist`）はやり直されず、予定の約 4 分後に通知された。やり直せるエラーでは、通知はやり直しを使い切った後（最大 24 時間後）になる（どのエラーがやり直されるかは一部だけ観測。09「[`dev` での検証結果](../09-architecture-specification.md#dev-での検証結果)」） |
 | Schedule そのもの（無効化・削除） | 呼び出しが起きない | **#109 で手当てした。** Scheduler が起動を試みた回数（`AWS/Scheduler` の `InvocationAttemptCount`）を日本時間の 1 日ごとに数え、0 回の日をアラーム → ルール → Slack 通知 Lambda で通知する（04「[リトライ](../04-non-functional-specification.md#リトライ)」の「実行が始まらない日の通知」）。気づくのは翌 0 時過ぎで、メトリクスが欠けた日は誤通知になる。`local` ではルール → 通知の経路だけを確かめた。`dev` ではウォームアップ中の状態だけを確かめ、評価のふるまいは未観測（費用のため見送り。#116） |
-| CloudWatch アラーム → イベントバス | アラームの状態変化イベントの EventBridge への配信は保証される（公式「Alarm events and EventBridge」） | LocalStack は出さない（下記）。アラームのメトリクス（SQS の `NumberOfMessagesSent`）の欠けは未観測 |
+| CloudWatch アラーム → イベントバス | アラームの状態変化イベントの EventBridge への配信は保証される（公式「Alarm events and EventBridge」） | LocalStack は出さない（下記）。アラームのメトリクス（SQS の `NumberOfMessagesSent`・`ApproximateNumberOfMessagesVisible`）の欠けは未観測 |
 | Step Functions → イベントバス | 状態変化イベントはベストエフォート（[Step Functions 解説](step-functions.md#状態変化イベントだけに通知を頼っている)） | 欠けたときの手当ては無い |
 | ルール → Lambda | 24 時間・185 回で捨てられる | DLQ は無い |
 | Lambda の関数 | 2 回の再試行で捨てられる | 失敗したイベントの送り先・DLQ は無い |
 
-Consumer 側の失敗（DLQ 行き）が通知に乗らないことは、元資料のリスクとして意図的に残している（02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」）。上の表は、それとは別に、通知の経路そのものが失敗を落としうる箇所。
+Consumer 側の失敗（DLQ 行き）は、実行が `SUCCEEDED` で終わるため状態変化イベントには乗らない（元資料のリスク 1）。#135 で、メール送信キューの DLQ のアラーム → ルール → Slack 通知 Lambda で通知するようにした（02「[F-5](../02-requirements-specification.md#f-5-失敗通知)」）。上の表は、それとは別に、通知の経路そのものが失敗を落としうる箇所。
 
 ### 料金
 

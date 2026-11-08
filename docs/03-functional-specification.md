@@ -53,7 +53,7 @@ SQS イベントソースから最大 5 件ずつ受け取り、1 件ずつ処�
 - イベント自体の形式が不正（`Records` が無い等）なら `ValidationError` を投げ、バッチ全体を再配信させる
 - 成功したメッセージは SQS から削除され、失敗したものだけが可視性タイムアウト後に再配信される
 - 3 回受信しても失敗したメッセージは DLQ へ移る（`maxReceiveCount: 3`）
-- Slack への通知はしない（02「F-5」）
+- Slack 通知 Lambda は呼ばない。DLQ へ移ったことは、DLQ のアラームで通知される（02「F-5」・#135）
 
 ### データ連携 Lambda（`data-sync`）
 
@@ -84,7 +84,7 @@ S3 のキーの日付と `exportedAt` は、同じ時刻（UTC）から作る。
 | イベント | 意味 | 通知に使う項目 |
 |---|---|---|
 | Step Functions の状態変化（`aws.states`） | 実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わった（F-5） | 実行名・実行 ARN・状態・エラー名・原因 |
-| CloudWatch アラームの状態変化（`aws.cloudwatch`） | 次のどちらかのアラームが `ALARM` になった。どちらも実行が始まっていない。Scheduler の DLQ のアラーム（起動に失敗した。F-5・#101）、実行が始まらない日のアラーム（その日に起動を試みなかった。F-5・#109） | アラーム名・`ALARM` になった理由 |
+| CloudWatch アラームの状態変化（`aws.cloudwatch`） | 次のどれかのアラームが `ALARM` になった。どれも実行の状態変化イベントでは知らせられない失敗。Scheduler の DLQ のアラーム（起動に失敗した。F-5・#101）、実行が始まらない日のアラーム（その日に起動を試みなかった。F-5・#109）、メール送信キューの DLQ のアラーム（実行は `SUCCEEDED` だが、メールの送信に失敗し続けたメッセージが DLQ にある。F-5・#135） | アラーム名・`ALARM` になった理由 |
 
 1. EventBridge のイベントを検証する。対象外（形式違い・通知対象外の状態。アラームの `OK` への変化も含む）なら、理由を警告ログに出して正常に終える。エラーにすると非同期呼び出しの再試行で同じイベントを受け直すだけで、結果は変わらないため
 2. 通知に使う項目を取り出す（07「スタブへの出力」）。状態変化イベントのエラー名と原因は、`null` でも項目が無くても `null` に揃える
@@ -92,7 +92,7 @@ S3 のキーの日付と `exportedAt` は、同じ時刻（UTC）から作る。
 
 通知自体が失敗した場合は、実行名（アラームならアラーム名）付きのエラーログを出してから投げ直し、Lambda の既定の再試行（2 回）に任せる。
 
-アラームの通知には、起動に失敗した理由（エラーコード）は入らない。理由は DLQ のメッセージの属性にあり、DLQ を受信して確かめる（04「リトライ」）。実行が始まらない日のアラームでは、`get-schedule` で Schedule の状態（`DISABLED`・削除・式の変更）を、`list-executions` でその日の定時の起動の実行が本当に無いかを確かめる（メトリクスの欠けによる誤通知がありうる。04「リトライ」）。
+アラームの通知には、起動に失敗した理由（エラーコード）は入らない。理由は DLQ のメッセージの属性にあり、DLQ を受信して確かめる（04「リトライ」）。実行が始まらない日のアラームでは、`get-schedule` で Schedule の状態（`DISABLED`・削除・式の変更）を、`list-executions` でその日の定時の起動の実行が本当に無いかを確かめる（メトリクスの欠けによる誤通知がありうる。04「リトライ」）。メール送信キューの DLQ のアラームでは、DLQ のメッセージの本文で、失敗した実行名と配信対象を確かめる（下記「操作方針」）。
 
 ## 処理の流れ
 
@@ -134,11 +134,11 @@ Lambda の呼び出しが一時的なエラーで失敗しても、`Retry` で�
 
 Consumer Lambda は、本文が不正なメッセージの 1 件だけを失敗にし、他は送る（部分バッチ応答）。不正な本文は何度受け取っても失敗するため、最大受信回数に達すると DLQ へ移る（上の「[Consumer Lambda](#consumer-lambdaconsumer)」）。投入 Lambda は本文を型どおりに組み立てるため、`failAt` では起こせない。1 件ずつの扱いは UT（08 #11・#24）で確かめた。不正な本文を実際のキューに置いた動きは観測していない。
 
-![本文が不正なメッセージのシーケンス図。SQS FIFO がイベントソースで最大 5 件を Consumer Lambda に渡し、うち 1 件の本文が不正。Consumer Lambda は 1 件ずつ検証し、不正な 1 件を失敗にしてエラーログを出し、残りを SendGrid スタブへ送る。同じグループの後続は送らずに失敗として返す。batchItemFailures で失敗した ID を返し、成功した分はキューから消える。失敗した分は可視性タイムアウトの後に再配信され、不正な本文は毎回失敗し、最大受信回数に達すると DLQ へ移る。Slack へは通知しない。不正な本文を実際のキューに置いた動きは未観測](images/sequences/consumer-invalid-body.drawio.svg)
+![本文が不正なメッセージのシーケンス図。SQS FIFO がイベントソースで最大 5 件を Consumer Lambda に渡し、うち 1 件の本文が不正。Consumer Lambda は 1 件ずつ検証し、不正な 1 件を失敗にしてエラーログを出し、残りを SendGrid スタブへ送る。同じグループの後続は送らずに失敗として返す。batchItemFailures で失敗した ID を返し、成功した分はキューから消える。失敗した分は可視性タイムアウトの後に再配信され、不正な本文は毎回失敗し、最大受信回数に達すると DLQ へ移り、DLQ のアラームで Slack へ通知される。不正な本文を実際のキューに置いた動きは未観測](images/sequences/consumer-invalid-body.drawio.svg)
 
 ### 実行の失敗
 
-実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、状態変化イベントが EventBridge rule を経て Slack 通知 Lambda に届く（02「F-5」）。メールの送信の失敗だけは Step Functions の外で起き、通知されない。
+実行が `FAILED` / `TIMED_OUT` / `ABORTED` で終わると、状態変化イベントが EventBridge rule を経て Slack 通知 Lambda に届く（02「F-5」）。メールの送信の失敗だけは Step Functions の外で起き、実行は `SUCCEEDED` のため状態変化イベントでは通知されない。DLQ へ移った後に、DLQ のアラームで遅れて通知される（#135）。
 
 #### 投入の失敗（`failAt: enqueue`）
 
@@ -154,7 +154,7 @@ Consumer Lambda は、本文が不正なメッセージの 1 件だけを失敗�
 
 #### メールの送信の失敗（`failAt: consumer`）
 
-![メールの送信の失敗のシーケンス図。投入 Lambda が simulateFailure を付けて積み、実行は SUCCEEDED で終わる。Consumer Lambda は注入エラーで失敗し、同じグループの後続も失敗として batchItemFailures で返す。可視性タイムアウトの後の再配信を最大受信回数まで繰り返し、メッセージは DLQ へ移る。Slack へは通知せず、DLQ のメッセージ数で確かめる](images/sequences/fail-consumer.drawio.svg)
+![メールの送信の失敗のシーケンス図。投入 Lambda が simulateFailure を付けて積み、実行は SUCCEEDED で終わる。Consumer Lambda は注入エラーで失敗し、同じグループの後続も失敗として batchItemFailures で返す。可視性タイムアウトの後の再配信を最大受信回数まで繰り返し、メッセージは DLQ へ移る。DLQ のメッセージ数が 1 以上で CloudWatch アラームが ALARM になり、rule を経て Slack 通知 Lambda がアラーム名と理由を通知する。実行の成功から通知までずれがある](images/sequences/fail-consumer.drawio.svg)
 
 ### 起動されない失敗
 
@@ -177,3 +177,4 @@ Consumer Lambda は、本文が不正なメッセージの 1 件だけを失敗�
 - **実行**: `aws stepfunctions start-execution`（`local` は LocalStack のエンドポイント）で、実行入力に `failAt` / `holdSeconds` を指定して起動する（`scripts/batch.sh <stage> run [failAt] [--hold-seconds <秒>]`）
 - **確認**: 実行の状態は `describe-execution`、各 Lambda の出力は CloudWatch Logs、連携ファイルは S3、DLQ はメッセージ数で確かめる
 - **ログ**: すべての Lambda は 1 行 1 JSON の構造化ログを出す。スタブの出力にも `stub` フィールドを付け、どの外部サービスへの送信を模したかを絞り込めるようにする
+- **メール送信キューの DLQ の後始末**: DLQ のアラームは、DLQ を空にするまで `ALARM` のままで、その間の次の失敗は通知されない（04「リトライ」の「メールの送信の失敗の通知」）。通知を受けたら DLQ のメッセージ数（`scripts/batch.sh <stage> dlq`）と本文で失敗した実行名・配信対象を確かめ、対応したら DLQ を空にする（`aws sqs purge-queue`。`scripts/` にはまだ無い）。空にしなければ、保持期間（4 日）で消えるまで `ALARM` が続く。空にした後に `OK` に戻ることは、まだ観測していない（04「リトライ」）

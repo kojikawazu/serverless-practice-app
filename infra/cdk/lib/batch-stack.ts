@@ -104,6 +104,12 @@ const SCHEDULER_MAX_EVENT_AGE_SECONDS = 86400;
 const SCHEDULER_DLQ_ALARM_PERIOD_MINUTES = 5;
 
 /**
+ * メール送信キューの DLQ のアラームがメッセージ数を見る期間（分）。期間の最大値が 1 以上なら ALARM にする。
+ * DLQ を空にするまで ALARM のままになる（docs/04「リトライ」の「メールの送信の失敗の通知」）
+ */
+const MAIL_DLQ_ALARM_PERIOD_MINUTES = 5;
+
+/**
  * 定時起動のタイムゾーン。実行が始まらない日のアラームも、この日付の区切り（0 時）で 1 日を数える。
  * 両者がずれると、9:00 の起動が評価の 1 日をまたいで数えられ、起動した日にも ALARM になる（docs/04「リトライ」）
  */
@@ -293,6 +299,29 @@ export class BatchStack extends Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
+    // ---- メールの送信の失敗の通知（docs/02「F-5」・#135）----
+    // Consumer が最大受信回数まで失敗したメッセージは、redrive で DLQ へ移る。redrive で移ったメッセージは
+    // NumberOfMessagesSent に数えられない（公式）ため、上の Scheduler の DLQ と違い、メッセージ数で数える。
+    // DLQ を空にするまで ALARM のままで、その間の次の失敗は通知されない（docs/04「リトライ」）
+    const mailDlqAlarm = new cloudwatch.Alarm(this, "MailDlqAlarm", {
+      alarmName: `${this.prefix}-mail-dlq`,
+      alarmDescription:
+        "メールの送信に失敗し続けたメッセージが DLQ にある（docs/04「リトライ」）",
+      metric: new cloudwatch.Metric({
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensionsMap: { QueueName: this.ssmValue("dlq/name") },
+        statistic: cloudwatch.Stats.MAXIMUM,
+        period: Duration.minutes(MAIL_DLQ_ALARM_PERIOD_MINUTES),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator:
+        cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      // データの無い期間は ALARM にしない。DLQ にメッセージが無いことを拾うアラームではないため
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
     // ---- 実行が始まらない日の通知（docs/04「リトライ」・#109）----
     // Schedule の無効化・削除では呼び出しが起きず、実行も DLQ への送信も無いため、上の 2 つの通知に乗らない。
     // Scheduler が起動を試みた回数を 1 日ごとに数え、0 回の日を ALARM にする。
@@ -364,6 +393,18 @@ export class BatchStack extends Stack {
         detail: {
           // CfnAlarm の Ref はアラーム名
           alarmName: [missedRunAlarm.ref],
+          state: { value: ["ALARM"] },
+        },
+      },
+      targets: [new eventsTargets.LambdaFunction(notifySlack)],
+    });
+    new events.Rule(this, "MailDlqAlarmRule", {
+      ruleName: `${this.prefix}-mail-dlq-alarm`,
+      eventPattern: {
+        source: ["aws.cloudwatch"],
+        detailType: ["CloudWatch Alarm State Change"],
+        detail: {
+          alarmName: [mailDlqAlarm.alarmName],
           state: { value: ["ALARM"] },
         },
       },

@@ -129,12 +129,13 @@ Slack 通知 Lambda が使う `detail` のフィールドは `executionArn` / `n
 
 ### アラームの状態変化イベント（EventBridge → Slack 通知 Lambda）
 
-次の 2 つのアラームが `ALARM` になったときに届く。rule はアラームごとに 1 つで、イベントパターンは `alarmName` だけが違う。
+次の 3 つのアラームが `ALARM` になったときに届く。rule はアラームごとに 1 つで、イベントパターンは `alarmName` だけが違う。
 
 | アラーム名 | 意味 | rule 名 |
 |---|---|---|
 | `serverless-practice-app-<stage>-scheduler-dlq` | Scheduler がステートマシンを起動できず、DLQ へ送った（04「リトライ」の「起動の失敗の通知」。#101） | `serverless-practice-app-<stage>-scheduler-dlq-alarm` |
 | `serverless-practice-app-<stage>-scheduler-missed-run` | Scheduler がその日（日本時間）の起動を 1 回も試みなかった（04「リトライ」の「実行が始まらない日の通知」。#109） | `serverless-practice-app-<stage>-scheduler-missed-run-alarm` |
+| `serverless-practice-app-<stage>-mail-dlq` | メールの送信に失敗し続けたメッセージが、メール送信キューの DLQ にある（04「リトライ」の「メールの送信の失敗の通知」。#135） | `serverless-practice-app-<stage>-mail-dlq-alarm` |
 
 ```json
 {
@@ -219,7 +220,7 @@ Scheduler が、起動に失敗した呼び出しを送る。このデモのコ�
 | `stub` | 出力する内容 |
 |---|---|
 | `sendgrid` | 宛先・件名・`recipientId` |
-| `slack` | 実行の失敗: 実行名・状態・エラー名・原因・実行 ARN。アラーム（#101）: アラーム名・`ALARM` になった理由（`message` で見分ける） |
+| `slack` | 実行の失敗: 実行名・状態・エラー名・原因・実行 ARN。アラーム（#101・#109・#135）: アラーム名・`ALARM` になった理由（`message` で見分ける。どのアラームかはアラーム名で見分ける） |
 | `bigquery` | 書き込み件数・`executionName` |
 | `cuenote-fc` | 登録件数・`executionName` |
 

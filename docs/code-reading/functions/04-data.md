@@ -13,8 +13,8 @@
 | `Recipient` | `functions/src/types/recipient.ts:4` | 配信対象。`recipientId`・`email`・`name` |
 | `ExportFile`（非公開） | `functions/src/handlers/data-sync.ts:71` | S3 に書く連携ファイル。`executionName`・`exportedAt`（ISO 8601、UTC）・`recipients` |
 | `EnqueueResult` / `DataSyncResult` | `enqueue.ts:35` / `data-sync.ts:61` | Step Functions へ返す出力。`{ enqueued }` / `{ exported, s3Key }` |
-| `ExecutionStatusEvent` / `AlarmStateChangeEvent` | `execution-status-event.ts:42` / `alarm-state-change-event.ts:27` | Slack 通知が受け取るイベントのうち、通知に使う項目だけ。未知のキーは拒否せず取り除く |
-| `ExecutionFailureNotice` / `AlarmNotice` | `functions/src/types/notification.ts:6` / `:20` | 通知の口へ渡す内容。`error` / `cause` は `string \| null` にそろえてある |
+| `ExecutionStatusEvent` / `AlarmStateChangeEvent` | `execution-status-event.ts:42` / `alarm-state-change-event.ts:28` | Slack 通知が受け取るイベントのうち、通知に使う項目だけ。未知のキーは拒否せず取り除く |
+| `ExecutionFailureNotice` / `AlarmNotice` | `functions/src/types/notification.ts:6` / `:21` | 通知の口へ渡す内容。`error` / `cause` は `string \| null` にそろえてある |
 
 ### スキーマの厳しさの使い分け
 
