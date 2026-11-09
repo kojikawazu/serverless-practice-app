@@ -9,6 +9,7 @@ import { z } from "zod";
 import { InjectedFailureError } from "../errors/injected-failure-error";
 import { loadHandlerContext } from "../lib/handler-context";
 import { parseInput } from "../lib/parse";
+import { runKeyOf } from "../lib/run-key";
 import { dataSyncEnvSchema } from "../schemas/env";
 import { dataSyncTaskInputSchema, taskTokenSchema } from "../schemas/execution";
 import type { DataSyncTaskInput } from "../schemas/execution";
@@ -70,6 +71,8 @@ export type DataSyncResult = {
  */
 type ExportFile = {
   executionName: string;
+  /** 論理キー（docs/05「論理キー（runKey）」）。`executionName` と違えば、再実行で書いたファイル */
+  runKey: string;
   /** 書き出した時刻（ISO 8601、UTC） */
   exportedAt: string;
   recipients: readonly Recipient[];
@@ -87,7 +90,7 @@ type ExportFile = {
  *   （元資料のリスク 4。補償処理は持たない）
  * - `failAt` が `dataSync` なら、S3 へ書いた後・BigQuery へ書く前に失敗する
  * - `holdSeconds` があれば、書き出しの後にその秒数だけ待つ。待つ間はハートビートを送る
- * - 失敗はエラーログを 1 行出し、`SendTaskFailure` で返す。実行名が分かった後の失敗には `executionName` を付ける
+ * - 失敗はエラーログを 1 行出し、`SendTaskFailure` で返す。実行名が分かった後の失敗には `executionName` と `runKey` を付ける
  * - タスクトークンが無い・不正なら結果を返せない。エラーログを出して終え、ステートマシン側のタイムアウトに任せる
  *
  * @param input - Step Functions から受け取るタスク入力（未検証）
@@ -117,7 +120,10 @@ export async function dataSync(
 
   try {
     const task = parseInput(dataSyncTaskInputSchema, input, "タスク入力");
-    logger = logger.child({ executionName: task.executionName });
+    logger = logger.child({
+      executionName: task.executionName,
+      runKey: runKeyOf(task),
+    });
     const result = await exportRecipients(task, deps, logger);
     await hold(task.holdSeconds ?? 0, taskToken, deps, logger);
     await deps.sfn.send(
@@ -134,7 +140,7 @@ export async function dataSync(
  *
  * @param task - 検証済みのタスク入力
  * @param deps - 依存
- * @param logger - 実行名を付けたロガー
+ * @param logger - 実行名と論理キーを付けたロガー
  * @returns 書き出した件数と S3 キー
  * @throws {InjectedFailureError} `failAt` が `dataSync` の場合
  */
@@ -144,12 +150,13 @@ async function exportRecipients(
   logger: Logger,
 ): Promise<DataSyncResult> {
   const { executionName, failAt } = task;
+  const runKey = runKeyOf(task);
   const recipients = await deps.recipients.findAll();
 
   const exportedAt = deps.now().toISOString();
-  // 日付は UTC。同じ実行を再実行すると同じキーに上書きされる（docs/05「連携ファイル」）
-  const s3Key = `exports/${exportedAt.slice(0, 10)}/${executionName}.json`;
-  const file: ExportFile = { executionName, exportedAt, recipients };
+  // 日付は UTC。キーの最後は論理キーのため、同じ日の再実行は失敗した実行のファイルを上書きする（docs/05「連携ファイル」）
+  const s3Key = `exports/${exportedAt.slice(0, 10)}/${runKey}.json`;
+  const file: ExportFile = { executionName, runKey, exportedAt, recipients };
   await deps.s3.send(
     new PutObjectCommand({
       Bucket: deps.bucketName,
@@ -163,8 +170,8 @@ async function exportRecipients(
     throw new InjectedFailureError(failAt);
   }
 
-  await deps.warehouse.write(executionName, recipients);
-  await deps.marketingList.write(executionName, recipients);
+  await deps.warehouse.write({ executionName, runKey }, recipients);
+  await deps.marketingList.write({ executionName, runKey }, recipients);
 
   logger.info("データ連携を完了しました", {
     exported: recipients.length,
@@ -180,7 +187,7 @@ async function exportRecipients(
  * @param seconds - 待つ秒数。0 なら何もしない
  * @param taskToken - ハートビートを送るタスクトークン
  * @param deps - 依存
- * @param logger - 実行名を付けたロガー
+ * @param logger - 実行名と論理キーを付けたロガー
  * @returns 待ち終えたら解決する
  */
 async function hold(

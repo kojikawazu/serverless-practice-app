@@ -28,6 +28,11 @@ export type SimulateFailure = z.infer<typeof simulateFailureSchema>;
 export const mailMessageSchema = z.strictObject({
   /** 投入したステートマシンの実行名 */
   executionName: executionNameSchema,
+  /**
+   * 論理キー（docs/05「論理キー（runKey）」）。送信記録のキーはこの値から作る。
+   * 再実行では最初の実行の名前、それ以外では `executionName` と同じ値。必須で、#137 より前に積まれた本文は受理しない
+   */
+  runKey: executionNameSchema,
   recipientId: recipientIdSchema,
   /**
    * 宛先メールアドレス。`@example.com` に限る。

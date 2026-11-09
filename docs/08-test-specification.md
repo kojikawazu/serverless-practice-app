@@ -17,7 +17,7 @@
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3・Step Functions）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（ステートマシンの種類・タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン・`DataSync` の呼び出し方・LMI の紐付け） |
-| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` も、終わらない・失敗する実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる）。`scripts/cdk.sh` の `diff` は、差分の出方（置換の有無・方法による違い・失敗）を思いどおりに作るため、CDK の CLI を呼ぶ `npx` を偽物（`test/scripts/helpers/fake-npx-cdk.ts`）に差し替えて確かめる |
+| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` と `rerun` も、終わらない・失敗する実行と、再実行の元の実行（状態・開始時刻・入力）を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。偽物の応答の形は LocalStack で観測したもの（#137）。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる）。`scripts/cdk.sh` の `diff` は、差分の出方（置換の有無・方法による違い・失敗）を思いどおりに作るため、CDK の CLI を呼ぶ `npx` を偽物（`test/scripts/helpers/fake-npx-cdk.ts`）に差し替えて確かめる |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる点（Scheduler の定時起動・状態変化イベントによる通知・LMI での実行）。結果は 09「`dev` での検証結果」 |
@@ -163,7 +163,7 @@ Lint 設定そのものも検査の対象にする。`test/lint/jsdoc.test.ts` �
 | 対象 | 実行 | CI |
 |---|---|---|
 | UT（handler・スキーマ・CDK）と型検査・Lint・整形 | `npm test` / `npm run typecheck` / `npm run lint` / `npm run format:check` | PR で毎回実行し、マージの必須チェックにする（`ci.yml` の `check`。09「CI とマージの条件」）。ドキュメント・ルールだけの変更ではスキップする |
-| IT | `./scripts/localstack.sh up` → `./scripts/stack.sh local up` の後に `npm run test:it`（約 6 分。#22 で DLQ へ移るまで待つため・#35 で 61 秒待つため） | PR で毎回実行する（`ci.yml` の `it`。約 12 分の見込み。内訳は起動 1 分・デプロイ 2 分・IT 6 分（手元で計測）・削除 2 分）。マージの必須チェックにする。ドキュメント・ルールだけの変更ではスキップする。認証トークンはリポジトリのシークレット `LOCALSTACK_AUTH_TOKEN` から渡すため、トークンの渡らない fork からの PR では落ちる。Dependabot の PR には Dependabot 用のシークレットから渡る（09「LocalStack の認証」） |
+| IT | `./scripts/localstack.sh up` → `./scripts/stack.sh local up` の後に `npm run test:it`（約 7 分。2026-11-09 に手元で 436 秒。#22 で DLQ へ移るまで待つため・#35 で 61 秒待つため・#91・#92 で再実行するため） | PR で毎回実行する（`ci.yml` の `it`。約 13 分の見込み。内訳は起動 1 分・デプロイ 2 分・IT 7 分（手元で計測）・削除 2 分）。マージの必須チェックにする。ドキュメント・ルールだけの変更ではスキップする。認証トークンはリポジトリのシークレット `LOCALSTACK_AUTH_TOKEN` から渡すため、トークンの渡らない fork からの PR では落ちる。Dependabot の PR には Dependabot 用のシークレットから渡る（09「LocalStack の認証」） |
 | 手動確認 | 03「操作方針」の手順 | 対象外 |
 
 ## 原則

@@ -55,7 +55,8 @@ async function processRecord(
     throw new InjectedFailureError("consumer");
   }
 
-  const messageKey = messageKeyOf(message.executionName, message.recipientId);
+  // 論理キーから作る。再実行は元の実行と同じキーになり、元の実行で送れていたメールを送らない（docs/05「論理キー（runKey）」）
+  const messageKey = messageKeyOf(message.runKey, message.recipientId);
   const begun = await deps.sendRecords.begin(messageKey);
   if (begun === "sent") {
     deps.logger.info("送信済みのため送りません", {
@@ -71,6 +72,7 @@ async function processRecord(
   try {
     await deps.mailSender.send({
       executionName: message.executionName,
+      runKey: message.runKey,
       recipientId: message.recipientId,
       to: message.email,
       subject: message.subject,

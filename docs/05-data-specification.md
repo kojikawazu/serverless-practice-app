@@ -96,7 +96,7 @@ SQS FIFO のメッセージ本文（JSON）と、送信時の属性。
 | `MessageDeduplicationId` | `<executionName>:<recipientId>` | 同じ実行の再投入（Step Functions の Retry）を 5 分以内なら重複排除する。UUID を毎回作ると効かない（元資料のリスク 2）。`runKey` ではなく実行名から作る（下記） |
 
 - 5 分を超えた再投入と、Consumer 側の二重処理（送った直後に落ちて再配信される）は、重複排除では防げない。どちらも、同じキーの送信記録（下記「送信記録」）で Consumer が送り直さない（#136）
-- **重複排除 ID は、再実行で引き継がない**（#137）。引き継ぐと、元の実行から 5 分以内に再実行したとき、再実行のメッセージが重複として捨てられる。`failAt: "consumer"` のメッセージは約 3 分で DLQ へ移り、通知を受けてすぐ再実行すると 5 分に収まりうる。重複として捨てられたメッセージも、送信は成功として返る（公式「Amazon SQS FIFO queue message deduplication ID」の記述。このデモでは観測していない）ため、送れなかったメールが送られないまま誰も気づけない。実行をまたいだ重複は、重複排除ではなく送信記録（`runKey` から作る）で防ぐ
+- **重複排除 ID は、再実行で引き継がない**（#137）。引き継ぐと、元の実行から 5 分以内に再実行したとき、再実行のメッセージが重複として捨てられる。`failAt: "consumer"` のメッセージは約 3 分で DLQ へ移り、通知を受けてすぐ再実行すると 5 分に収まりうる。重複として捨てられたメッセージも、送信は成功として返る（公式「Amazon SQS FIFO queue message deduplication ID」の記述）ため、送れなかったメールが送られないまま誰も気づけない。LocalStack では、重複排除 ID を論理キーから作るように一時的に変えると、`failAt: "consumer"` の実行から 5 分以内に起動した再実行は `SUCCEEDED` になったが、メールは 60 秒待っても 1 通も送られなかった（IT の 08 #92 が落ちた。2026-11-09、#137）。実 AWS では未観測実行をまたいだ重複は、重複排除ではなく送信記録（`runKey` から作る）で防ぐ
 - グループは実行をまたいで共有される。失敗し続けるメッセージ（`failAt: "consumer"`）がグループの先頭にあると、DLQ へ移るまで（約 3 分）同じ宛先の別の実行のメッセージも止まる。Consumer は同じグループの後続を失敗として返す（03「Consumer Lambda」）ため、仕組み上は後続の受信回数も増え、DLQ へ移りうる。IT はこのため `consumer` のケースを最後に順番に実行する（08「テストケース」）
 
 ### 連携ファイル（ExportFile）
@@ -154,7 +154,7 @@ DynamoDB のテーブル `serverless-practice-app-<stage>-send-records`（Terraf
 | 連携ファイルのキー | `exports/<YYYY-MM-DD>/<runKey>.json` | 引き継ぐ。同じ日なら上書きする |
 | SQS の重複排除 ID | `<executionName>:<recipientId>` | **引き継がない**（上記「メールメッセージ」） |
 
-実行名を使い回して同じキーにする手はとれない。Step Functions の Standard ワークフローは、終わった実行と同じ名前の実行を 90 日間は始められない（公式「StartExecution」の記述。観測していない）。
+実行名を使い回して同じキーにする手はとれない。Step Functions の Standard ワークフローは、終わった実行と同じ名前の実行を 90 日間は始められない（公式「StartExecution」の記述。90 日は観測していない）。LocalStack では、終わった実行と同じ名前で `start-execution` すると `ExecutionAlreadyExists` で断られた（2026-11-09、#137）。実 AWS では未観測。
 
 ### SSM パラメータ
 

@@ -233,7 +233,7 @@ Scheduler が、起動に失敗した呼び出しを送る。このデモのコ�
 
 | `stub` | 出力する内容 |
 |---|---|
-| `sendgrid` | 宛先・件名・`recipientId` |
+| `sendgrid` | 宛先・件名・`recipientId`・`executionName`・`runKey` |
 | `slack` | 実行の失敗: 実行名・状態・エラー名・原因・実行 ARN。アラーム（#101・#109・#135）: アラーム名・`ALARM` になった理由（`message` で見分ける。どのアラームかはアラーム名で見分ける） |
 | `bigquery` | 書き込み件数・`executionName`・`runKey` |
 | `cuenote-fc` | 登録件数・`executionName`・`runKey` |

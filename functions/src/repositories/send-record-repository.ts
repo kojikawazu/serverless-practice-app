@@ -34,7 +34,7 @@ function isConditionalCheckFailed(error: unknown): boolean {
 
 /**
  * DynamoDB のテーブルに送信記録を置く（docs/05「送信記録」）。
- * キーは `messageKey`（`<実行名>:<配信対象 ID>`）、状態は `status`（`SENDING` / `SENT`）、期限は `expiresAt`（エポック秒）。
+ * キーは `messageKey`（`<論理キー>:<配信対象 ID>`）、状態は `status`（`SENDING` / `SENT`）、期限は `expiresAt`（エポック秒）。
  */
 export class DynamoDbSendRecordStore implements SendRecordStore {
   /**

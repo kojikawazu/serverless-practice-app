@@ -157,6 +157,46 @@ describe("holdSeconds（検証用の待ち時間）", () => {
   });
 });
 
+describe("rerunOf（再実行の元の実行名。#137）", () => {
+  describe("正常系", () => {
+    it.each(["run-1", "a".repeat(80)])(
+      "実行名の制約に合う %j を受理する",
+      (rerunOf) => {
+        expect(
+          taskInputSchema.parse({ executionName: "rerun-1", rerunOf }),
+        ).toEqual({ executionName: "rerun-1", rerunOf });
+      },
+    );
+
+    it("省略を受理し、rerunOf の無い入力として扱う（再実行ではない）", () => {
+      expect(taskInputSchema.parse({ executionName: "run-1" })).toEqual({
+        executionName: "run-1",
+      });
+    });
+  });
+
+  describe("準正常系", () => {
+    it.each(["", "a/b", "a:b", "a".repeat(81)])(
+      "実行名の制約に合わない %j を拒否する（送信記録・S3 のキーを壊さない）",
+      (rerunOf) => {
+        expect(
+          taskInputSchema.safeParse({ executionName: "rerun-1", rerunOf })
+            .success,
+        ).toBe(false);
+      },
+    );
+  });
+
+  describe("異常系", () => {
+    it.each([1, null])("文字列でない %j を拒否する", (rerunOf) => {
+      expect(
+        taskInputSchema.safeParse({ executionName: "rerun-1", rerunOf })
+          .success,
+      ).toBe(false);
+    });
+  });
+});
+
 describe("dataSyncTaskInputSchema（データ連携 Lambda のタスク入力）", () => {
   describe("正常系", () => {
     it("共通のタスク入力にタスクトークンを足した入力を受理する", () => {

@@ -5,6 +5,8 @@
 export type OutgoingMail = {
   /** 投入したステートマシンの実行名。ログで実行を横断して追うために使う */
   executionName: string;
+  /** 論理キー（docs/05「論理キー（runKey）」）。最初の実行の名前で、元の実行と再実行のログをまとめて引くために使う */
+  runKey: string;
   recipientId: string;
   /** 宛先メールアドレス */
   to: string;

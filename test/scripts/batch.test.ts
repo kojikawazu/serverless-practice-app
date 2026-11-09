@@ -11,7 +11,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FakeSfnState } from "./helpers/fake-aws-sfn";
 
-// scripts/batch.sh の run（実行を起動して結果を待つ）を、偽の AWS CLI で確かめる（docs/08 #47〜#49）。
+// scripts/batch.sh の run（実行を起動して結果を待つ）と rerun（論理キーを引き継いで再実行する）を、偽の AWS CLI で確かめる（docs/08 #47〜#49・#88〜#90）。
 // 実行の結果（終わらない・失敗する）を思いどおりに作るため、外部 I/O の AWS CLI だけを PATH の先頭の偽物に差し替える（testing.md）。
 //
 // 実 AWS に触れないための備え（budget-alert.test.ts と同じ）:
@@ -283,6 +283,250 @@ describe("batch.sh run", () => {
         "ステートマシン serverless-practice-app-dev-batch が見つかりません。scripts/stack.sh dev up でデプロイしてください",
       );
       expect(result.calls).toHaveLength(1);
+      expect(result.state.started).toBeNull();
+    });
+  });
+});
+
+/**
+ * 今から指定した時間だけ前の時刻を、AWS CLI が describe-execution の startDate に出す形（オフセット付きの ISO 8601）で作る。
+ *
+ * @param hours - 何時間前か
+ * @returns `2026-11-09T13:43:36.932+00:00` の形の文字列
+ */
+function hoursAgo(hours: number): string {
+  return new Date(Date.now() - hours * 60 * 60 * 1000)
+    .toISOString()
+    .replace("Z", "+00:00");
+}
+
+/**
+ * 元の実行がある状態を作る。再実行で起動した実行はすぐ SUCCEEDED で終わる。
+ *
+ * @param executions - 既にある実行
+ * @returns 偽の Step Functions の初期状態
+ */
+function withExecutions(
+  executions: NonNullable<FakeSfnState["executions"]>,
+): FakeSfnState {
+  return { ...deployedState(), executions };
+}
+
+/** failAt: dataSync で 1 日前に失敗した、最初の実行 manual-1 */
+const FAILED_MANUAL_1 = {
+  "manual-1": {
+    status: "FAILED",
+    startDate: hoursAgo(24),
+    input: JSON.stringify({ failAt: "dataSync" }),
+  },
+};
+
+describe("batch.sh rerun（#137）", () => {
+  describe("正常系", () => {
+    it("新しい実行名で、rerunOf に元の実行名を入れて起動する。元の failAt は引き継がない", () => {
+      const result = batch(withExecutions(FAILED_MANUAL_1), [
+        "rerun",
+        "manual-1",
+      ]);
+
+      expect(result.code).toBe(0);
+      expect(result.state.started?.name).toMatch(/^rerun-\d{8}-\d{6}$/);
+      expect(startedInput(result)).toEqual({ rerunOf: "manual-1" });
+      expect(result.stdout).toContain(
+        "再実行します: manual-1 の論理キー manual-1 を引き継ぎます",
+      );
+      expect(result.stdout).toContain("状態: SUCCEEDED");
+    });
+
+    it("再実行の再実行では、元の実行の入力の rerunOf（最初の実行の名前）を引き継ぐ", () => {
+      const result = batch(
+        withExecutions({
+          ...FAILED_MANUAL_1,
+          "rerun-1": {
+            status: "FAILED",
+            startDate: hoursAgo(1),
+            input: JSON.stringify({ rerunOf: "manual-1" }),
+          },
+        }),
+        ["rerun", "rerun-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(startedInput(result)).toEqual({ rerunOf: "manual-1" });
+    });
+
+    it("rerun に付けた failAt と --hold-seconds だけを渡し、待つ秒数に holdSeconds を足す", () => {
+      const result = batch(withExecutions(FAILED_MANUAL_1), [
+        "rerun",
+        "manual-1",
+        "consumer",
+        "--hold-seconds",
+        "10",
+      ]);
+
+      expect(result.code).toBe(0);
+      expect(startedInput(result)).toEqual({
+        rerunOf: "manual-1",
+        failAt: "consumer",
+        holdSeconds: 10,
+      });
+      expect(result.stdout).toContain("最大 370 秒待ちます");
+    });
+
+    it("SUCCEEDED の実行も再実行できる（メールの送信の失敗は、実行が SUCCEEDED のまま起きる）", () => {
+      const result = batch(
+        withExecutions({
+          "manual-1": {
+            status: "SUCCEEDED",
+            startDate: hoursAgo(1),
+            input: "{}",
+          },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(startedInput(result)).toEqual({ rerunOf: "manual-1" });
+    });
+
+    it("最初の実行の開始から 7 日の少し手前（6 日 23 時間前）なら起動する", () => {
+      const result = batch(
+        withExecutions({
+          "manual-1": { status: "FAILED", startDate: hoursAgo(7 * 24 - 1) },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.state.started).not.toBeNull();
+    });
+  });
+
+  describe("準正常系", () => {
+    it.each([
+      {
+        label: "元の実行が見つからない",
+        executions: FAILED_MANUAL_1,
+        name: "manual-9",
+        message: "元の実行 manual-9 が見つかりません",
+      },
+      {
+        label: "元の実行が RUNNING",
+        executions: {
+          "manual-1": { status: "RUNNING", startDate: hoursAgo(0) },
+        },
+        name: "manual-1",
+        message: "元の実行 manual-1 はまだ実行中です",
+      },
+      {
+        label: "最初の実行の開始から 7 日を過ぎている",
+        executions: {
+          "manual-1": { status: "FAILED", startDate: hoursAgo(7 * 24 + 1) },
+        },
+        name: "manual-1",
+        message: "最初の実行 manual-1 の開始から 7 日を過ぎています",
+      },
+      {
+        label:
+          "再実行の再実行で、最初の実行の開始から 7 日を過ぎている（元の実行は 1 時間前）",
+        executions: {
+          "manual-1": { status: "FAILED", startDate: hoursAgo(8 * 24) },
+          "rerun-1": {
+            status: "FAILED",
+            startDate: hoursAgo(1),
+            input: JSON.stringify({ rerunOf: "manual-1" }),
+          },
+        },
+        name: "rerun-1",
+        message: "最初の実行 manual-1 の開始から 7 日を過ぎています",
+      },
+      {
+        label: "再実行の再実行で、最初の実行が見つからない",
+        executions: {
+          "rerun-1": {
+            status: "FAILED",
+            startDate: hoursAgo(1),
+            input: JSON.stringify({ rerunOf: "manual-1" }),
+          },
+        },
+        name: "rerun-1",
+        message: "最初の実行 manual-1 が見つかりません",
+      },
+      {
+        label: "元の実行の入力の rerunOf が実行名の形式ではない",
+        executions: {
+          "rerun-1": {
+            status: "FAILED",
+            startDate: hoursAgo(1),
+            input: JSON.stringify({ rerunOf: "a/b" }),
+          },
+        },
+        name: "rerun-1",
+        message:
+          "元の実行 rerun-1 の入力の rerunOf が実行名の形式ではありません",
+      },
+      {
+        label: "元の実行の開始時刻が無い",
+        executions: { "manual-1": { status: "FAILED" } },
+        name: "manual-1",
+        message: "元の実行 manual-1 の状態・開始時刻を読めません",
+      },
+    ])(
+      "$label なら、起動せずに理由を出して 1 で終わる",
+      ({ executions, name, message }) => {
+        const result = batch(withExecutions(executions), ["rerun", name]);
+
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain(message);
+        expect(result.state.started).toBeNull();
+        expect(
+          result.calls.filter((args) => args[1] === "start-execution"),
+        ).toEqual([]);
+      },
+    );
+
+    it("元の実行名が実行名の形式でなければ、AWS を呼ばずに 1 で終わる", () => {
+      const result = batch(withExecutions(FAILED_MANUAL_1), ["rerun", "a/b"]);
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("実行名の形式ではありません: a/b");
+      expect(result.calls).toEqual([]);
+    });
+
+    it.each([
+      { label: "元の実行名が無い", args: ["rerun"] },
+      {
+        label: "元の実行名の代わりにオプション",
+        args: ["rerun", "--hold-seconds", "10"],
+      },
+      {
+        label: "failAt が 2 つ",
+        args: ["rerun", "manual-1", "dataSync", "consumer"],
+      },
+    ])("$label なら、起動せずに使い方を出して 2 で終わる", ({ args }) => {
+      const result = batch(withExecutions(FAILED_MANUAL_1), args);
+
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("使い方:");
+      expect(result.calls).toEqual([]);
+    });
+  });
+
+  describe("異常系", () => {
+    it("元の実行を読めなければ（認証切れ）、「見つからない」と区別して出し、起動せずに 1 で終わる", () => {
+      const result = batch(
+        {
+          ...withExecutions(FAILED_MANUAL_1),
+          failOn: { "describe-execution": "ExpiredTokenException" },
+        },
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(
+        "元の実行 manual-1 を読めません。AWS の認証（aws login）と接続先を確認してください",
+      );
+      expect(result.stderr).not.toContain("見つかりません");
       expect(result.state.started).toBeNull();
     });
   });

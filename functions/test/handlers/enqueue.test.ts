@@ -124,6 +124,7 @@ describe("enqueue", () => {
       );
       expect(bodies[0]).toEqual({
         executionName: "run-1",
+        runKey: "run-1",
         recipientId: "r-001",
         email: "user1@example.com",
         subject: "serverless-practice-app デモ配信",
@@ -161,6 +162,7 @@ describe("enqueue", () => {
           message: "メールメッセージを投入しました",
           function: "enqueue",
           executionName: "run-1",
+          runKey: "run-1",
           enqueued: 3,
         },
       ]);
@@ -252,6 +254,7 @@ describe("enqueue", () => {
           level: "ERROR",
           message: "投入に失敗しました",
           executionName: "run-1",
+          runKey: "run-1",
           errorName: "InjectedFailureError",
           stack: expect.stringContaining("InjectedFailureError") as unknown,
         }),
@@ -352,6 +355,60 @@ describe("enqueue", () => {
         "QueueDoesNotExist",
       );
     });
+  });
+});
+
+describe("enqueue（再実行。#137）", () => {
+  describe("正常系", () => {
+    it("rerunOf があれば本文の runKey はその値になり、重複排除 ID は実行名から作ったまま変わらない", async () => {
+      const { deps } = setup();
+
+      await enqueue({ executionName: "rerun-1", rerunOf: "run-1" }, deps);
+
+      const entries = sentEntries();
+      expect(
+        entries.map(
+          (entry) =>
+            mailMessageSchema.parse(JSON.parse(entry.MessageBody ?? "")).runKey,
+        ),
+      ).toEqual(["run-1", "run-1", "run-1"]);
+      // 論理キーから作ると、5 分以内の再実行のメッセージが重複として捨てられる（docs/05「メールメッセージ」）
+      expect(entries.map((entry) => entry.MessageDeduplicationId)).toEqual([
+        "rerun-1:r-001",
+        "rerun-1:r-002",
+        "rerun-1:r-003",
+      ]);
+    });
+
+    it("rerunOf があれば、ログに実行名と論理キーの両方を出す", async () => {
+      const { deps, records } = setup();
+
+      await enqueue({ executionName: "rerun-1", rerunOf: "run-1" }, deps);
+
+      expect(records()[0]).toMatchObject({
+        executionName: "rerun-1",
+        runKey: "run-1",
+      });
+    });
+  });
+
+  describe("準正常系", () => {
+    it.each([
+      ["空", ""],
+      ["/ を含む", "a/b"],
+      [": を含む", "a:b"],
+      ["81 文字", "a".repeat(81)],
+    ])(
+      "rerunOf が制約に合わない（%s）と、SQS を呼ばずに ValidationError を投げる",
+      async (_label, rerunOf) => {
+        const { deps } = setup();
+
+        await expect(
+          enqueue({ executionName: "rerun-1", rerunOf }, deps),
+        ).rejects.toThrow(ValidationError);
+        expect(sqsMock.commandCalls(SendMessageBatchCommand)).toHaveLength(0);
+      },
+    );
   });
 });
 

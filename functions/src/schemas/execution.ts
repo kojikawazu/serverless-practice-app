@@ -33,9 +33,9 @@ const HOLD_SECONDS_MAX = 1200;
 const holdSecondsSchema = z.int().min(0).max(HOLD_SECONDS_MAX);
 
 /**
- * Step Functions の実行名。S3 のキーと SQS の重複排除 ID に埋め込むため、
- * キーの区切り `/` などを含ませないよう文字種を制限する（docs/06「入力バリデーション」）。
- * 80 文字は Step Functions の実行名の上限。
+ * Step Functions の実行名。SQS の重複排除 ID・送信記録のキー・S3 のキーに埋め込むため、
+ * キーの区切り（`/`・`:`）を含ませないよう文字種を制限する（docs/06「入力バリデーション」）。
+ * 80 文字は Step Functions の実行名の上限。再実行の `rerunOf` と、メッセージ本文の `runKey` も同じ制約で検証する。
  */
 export const executionNameSchema = z.string().regex(/^[A-Za-z0-9_-]{1,80}$/);
 
@@ -52,6 +52,11 @@ export const taskInputSchema = z.strictObject({
   failAt: failAtSchema.optional(),
   /** 実行入力から引き継いだ検証用の待ち時間（秒）。データ連携 Lambda だけが使う。省略時は待たない */
   holdSeconds: holdSecondsSchema.optional(),
+  /**
+   * 再実行の元の実行名（再実行の再実行でも最初の実行の名前。docs/03「失敗の後の再実行」）。
+   * 省略は再実行ではないことを表し、論理キーは実行名になる（`runKeyOf`）。存在する実行かどうかは検証しない（docs/06）
+   */
+  rerunOf: executionNameSchema.optional(),
 });
 
 /** 投入 Lambda・データ連携 Lambda のタスク入力 */

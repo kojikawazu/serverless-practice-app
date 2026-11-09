@@ -57,7 +57,8 @@ describe("SendGridStub", () => {
       const { logger, records } = captureLogger({ function: "consumer" });
 
       await new SendGridStub(logger).send({
-        executionName: "run-1",
+        executionName: "rerun-1",
+        runKey: "run-1",
         recipientId: "r-001",
         to: "user1@example.com",
         subject: "件名",
@@ -69,7 +70,8 @@ describe("SendGridStub", () => {
           message: "メールを送信しました（スタブ）",
           function: "consumer",
           stub: "sendgrid",
-          executionName: "run-1",
+          executionName: "rerun-1",
+          runKey: "run-1",
           recipientId: "r-001",
           to: "user1@example.com",
           subject: "件名",
@@ -167,10 +169,13 @@ describe.each([
   ],
 ])("%s", (_name, Stub, stub, message) => {
   describe("正常系", () => {
-    it("書き出し件数と実行名をログ 1 行に出す", async () => {
+    it("書き出し件数・実行名・論理キーをログ 1 行に出す", async () => {
       const { logger, records } = captureLogger({ function: "data-sync" });
 
-      await new Stub(logger).write("run-1", RECIPIENTS);
+      await new Stub(logger).write(
+        { executionName: "rerun-1", runKey: "run-1" },
+        RECIPIENTS,
+      );
 
       expect(records()).toEqual([
         {
@@ -178,7 +183,8 @@ describe.each([
           message,
           function: "data-sync",
           stub,
-          executionName: "run-1",
+          executionName: "rerun-1",
+          runKey: "run-1",
           count: 2,
         },
       ]);
@@ -189,7 +195,10 @@ describe.each([
     it("0 件でも省略せず count=0 を出す（書き出しが呼ばれたことを記録する）", async () => {
       const { logger, records } = captureLogger({});
 
-      await new Stub(logger).write("run-1", []);
+      await new Stub(logger).write(
+        { executionName: "run-1", runKey: "run-1" },
+        [],
+      );
 
       expect(records()[0]).toMatchObject({ stub, count: 0 });
     });
@@ -197,7 +206,10 @@ describe.each([
     it("配信対象の個人項目（メールアドレス）をログに出さない", async () => {
       const { logger, lines } = captureLogger({});
 
-      await new Stub(logger).write("run-1", RECIPIENTS);
+      await new Stub(logger).write(
+        { executionName: "run-1", runKey: "run-1" },
+        RECIPIENTS,
+      );
 
       expect(lines.join("")).not.toContain("@example.com");
     });

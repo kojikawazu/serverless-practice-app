@@ -5,6 +5,7 @@ import { InjectedFailureError } from "../errors/injected-failure-error";
 import { loadHandlerContext } from "../lib/handler-context";
 import { messageKeyOf } from "../lib/message-key";
 import { parseInput } from "../lib/parse";
+import { runKeyOf } from "../lib/run-key";
 import { enqueueEnvSchema } from "../schemas/env";
 import { taskInputSchema } from "../schemas/execution";
 import type { FailAt, TaskInput } from "../schemas/execution";
@@ -73,9 +74,11 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  * 配信対象ごとにメールメッセージを作り、SQS FIFO へ積む（docs/03「投入 Lambda」）。
  *
  * - 重複排除 ID は `<実行名>:<配信対象 ID>` で決定的に作る。Step Functions の Retry で同じ実行が
- *   再投入されても、5 分以内なら FIFO が重複を除く
+ *   再投入されても、5 分以内なら FIFO が重複を除く。論理キー（runKey）からは作らない。再実行のメッセージが
+ *   5 分以内なら重複として捨てられ、送れなかったメールが送られないまま終わるため（docs/05「メールメッセージ」）
+ * - 本文の `runKey` は、`rerunOf` があればその値、無ければ実行名。Consumer は送信記録のキーをこの値から作る
  * - 一部のメッセージが送れなくても残りのバッチは送り切り、最後にまとめて失敗させる
- * - 失敗はエラーログを 1 行出してから投げ直す。実行名が分かった後の失敗には `executionName` を付ける
+ * - 失敗はエラーログを 1 行出してから投げ直す。実行名が分かった後の失敗には `executionName` と `runKey` を付ける
  *
  * @param input - Step Functions から受け取るタスク入力（未検証）
  * @param deps - 依存
@@ -91,7 +94,10 @@ export async function enqueue(
   let logger = deps.logger;
   try {
     const task = parseInput(taskInputSchema, input, "タスク入力");
-    logger = logger.child({ executionName: task.executionName });
+    logger = logger.child({
+      executionName: task.executionName,
+      runKey: runKeyOf(task),
+    });
     return await sendMessages(task, deps, logger);
   } catch (error) {
     logger.error("投入に失敗しました", error);
@@ -104,7 +110,7 @@ export async function enqueue(
  *
  * @param task - 検証済みのタスク入力
  * @param deps - 依存
- * @param logger - 実行名を付けたロガー
+ * @param logger - 実行名と論理キーを付けたロガー
  * @returns 積んだ件数
  * @throws {InjectedFailureError} `failAt` が `enqueue` の場合
  * @throws {EnqueuePartialFailureError} `SendMessageBatch` の一部が失敗した場合
@@ -115,6 +121,7 @@ async function sendMessages(
   logger: Logger,
 ): Promise<EnqueueResult> {
   const { executionName, failAt } = task;
+  const runKey = runKeyOf(task);
   if (failAt === "enqueue") {
     throw new InjectedFailureError(failAt);
   }
@@ -123,6 +130,7 @@ async function sendMessages(
   const entries = recipients.map((recipient): SendMessageBatchRequestEntry => {
     const message: MailMessage = {
       executionName,
+      runKey,
       recipientId: recipient.recipientId,
       email: recipient.email,
       subject: MAIL_SUBJECT,

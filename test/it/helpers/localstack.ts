@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import {
   CloudWatchLogsClient,
   FilterLogEventsCommand,
@@ -9,7 +11,11 @@ import {
   ListEventSourceMappingsCommand,
   UpdateEventSourceMappingCommand,
 } from "@aws-sdk/client-lambda";
-import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import {
   DescribeExecutionCommand,
   ListStateMachinesCommand,
@@ -353,6 +359,43 @@ export async function findStubLogs(
   executionName: string,
   stub: string,
 ): Promise<StubLog[]> {
+  return findStubLogsWhere(
+    fn,
+    stub,
+    (log) => log.executionName === executionName,
+  );
+}
+
+/**
+ * 指定した論理キー（docs/05「論理キー（runKey）」）のスタブのログを集める。
+ * 元の実行と再実行は実行名が違い、論理キーが同じため、両方の出力を合わせて数えるときに使う（#137）。
+ *
+ * @param fn - ログを出した Lambda
+ * @param runKey - 論理キー（最初の実行の名前）
+ * @param stub - スタブの種類（`sendgrid` など）
+ * @returns 見つかったログ（0 件なら空配列）
+ */
+export async function findStubLogsByRunKey(
+  fn: FunctionName,
+  runKey: string,
+  stub: string,
+): Promise<StubLog[]> {
+  return findStubLogsWhere(fn, stub, (log) => log.runKey === runKey);
+}
+
+/**
+ * Lambda のログから、指定したスタブの出力のうち条件に合うものを集める。
+ *
+ * @param fn - ログを出した Lambda
+ * @param stub - スタブの種類
+ * @param matches - 残すログの条件
+ * @returns 見つかったログ（0 件なら空配列）
+ */
+async function findStubLogsWhere(
+  fn: FunctionName,
+  stub: string,
+  matches: (log: StubLog) => boolean,
+): Promise<StubLog[]> {
   const found: StubLog[] = [];
   let nextToken: string | undefined;
   do {
@@ -365,7 +408,7 @@ export async function findStubLogs(
     );
     for (const event of page.events ?? []) {
       const log = parseStubLog(event.message);
-      if (log?.stub === stub && log.executionName === executionName) {
+      if (log?.stub === stub && matches(log)) {
         found.push(log);
       }
     }
@@ -493,6 +536,60 @@ export async function findExportKeys(
     token = page.NextContinuationToken;
   } while (token !== undefined);
   return keys;
+}
+
+/**
+ * 連携ファイルの中身を読む。再実行が同じキーへ上書きしたことを、中身の実行名で確かめるために使う（#137）。
+ *
+ * @param bucketName - バケット名
+ * @param key - オブジェクトキー
+ * @returns 連携ファイルの JSON（形は検証しない。読む側の IT が項目を確かめる）
+ */
+export async function readExportFile(
+  bucketName: string,
+  key: string,
+): Promise<unknown> {
+  const object = await s3.send(
+    new GetObjectCommand({ Bucket: bucketName, Key: key }),
+  );
+  return JSON.parse((await object.Body?.transformToString()) ?? "null");
+}
+
+/** scripts/batch.sh の場所。IT は再実行をこのスクリプトで起動し、引き継ぎの処理まで確かめる（docs/08「テストケース」） */
+const BATCH_SH = path.resolve(import.meta.dirname, "../../../scripts/batch.sh");
+
+/**
+ * `scripts/batch.sh local rerun` で再実行し、終わるまで待つ。スクリプトが終わった後に、起動した実行を読み直して返す。
+ *
+ * @param stateMachineArn - ステートマシンの ARN
+ * @param originalName - 元の実行名
+ * @returns 再実行した実行の情報（状態・開始時刻・入力）
+ * @throws {Error} スクリプトが 0 以外で終わった・起動した実行名を出さなかった場合
+ */
+export async function rerunWithScript(
+  stateMachineArn: string,
+  originalName: string,
+): Promise<DescribeExecutionCommandOutput> {
+  const result = spawnSync("bash", [BATCH_SH, STAGE, "rerun", originalName], {
+    encoding: "utf8",
+    timeout: 420_000,
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `batch.sh rerun が ${String(result.status)} で終わりました: ${result.stderr}`,
+    );
+  }
+  const name = /起動しました: (rerun-[0-9-]+)/.exec(result.stdout)?.[1];
+  if (name === undefined) {
+    throw new Error(
+      `batch.sh rerun が実行名を出しませんでした: ${result.stdout}`,
+    );
+  }
+  return sfn.send(
+    new DescribeExecutionCommand({
+      executionArn: `${stateMachineArn.replace(":stateMachine:", ":execution:")}:${name}`,
+    }),
+  );
 }
 
 /**

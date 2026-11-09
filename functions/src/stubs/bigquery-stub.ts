@@ -1,4 +1,4 @@
-import type { ExportWriter } from "../types/export";
+import type { ExportRun, ExportWriter } from "../types/export";
 import type { Logger } from "../types/logger";
 import type { Recipient } from "../types/recipient";
 
@@ -14,17 +14,15 @@ export class BigQueryStub implements ExportWriter {
   /**
    * 書き込み件数を 1 行のログに出す。
    *
-   * @param executionName - 書き出しを行った実行の実行名
+   * @param run - 書き出しを行った実行。`runKey` も出し、再実行で同じ論理キーの書き込みが 2 回起きたことを見分けられるようにする
    * @param recipients - 書き出す配信対象
    * @returns ログを出し終えたら解決する
    */
-  write(
-    executionName: string,
-    recipients: readonly Recipient[],
-  ): Promise<void> {
+  write(run: ExportRun, recipients: readonly Recipient[]): Promise<void> {
     this.logger.info("BigQuery へ書き込みました（スタブ）", {
       stub: "bigquery",
-      executionName,
+      executionName: run.executionName,
+      runKey: run.runKey,
       count: recipients.length,
     });
     return Promise.resolve();
