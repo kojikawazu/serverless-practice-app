@@ -17,7 +17,7 @@
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3・Step Functions）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（ステートマシンの種類・タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン・`DataSync` の呼び出し方・LMI の紐付け） |
-| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` も、終わらない・失敗する実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる）。`scripts/cdk.sh` の `diff` は、差分の出方（置換の有無・方法による違い・失敗）を思いどおりに作るため、CDK の CLI を呼ぶ `npx` を偽物（`test/scripts/helpers/fake-npx-cdk.ts`）に差し替えて確かめる |
+| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` と `rerun` も、終わらない・失敗する実行と、再実行の元の実行（状態・開始時刻・入力）を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。偽物の応答の形は LocalStack で観測したもの（#137）。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる）。`scripts/cdk.sh` の `diff` は、差分の出方（置換の有無・方法による違い・失敗）を思いどおりに作るため、CDK の CLI を呼ぶ `npx` を偽物（`test/scripts/helpers/fake-npx-cdk.ts`）に差し替えて確かめる |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる点（Scheduler の定時起動・状態変化イベントによる通知・LMI での実行）。結果は 09「`dev` での検証結果」 |
@@ -113,6 +113,17 @@
 | 79 | CDK: Consumer に、送信記録のテーブル名を SSM（`send-records/name`）から環境変数 `SEND_RECORDS_TABLE` で渡す（#136） | UT | 正常系 |
 | 80 | `failAt: "consumerAfterSend"` の実行が `SUCCEEDED` になり、可視性タイムアウトの後の再配信で配信対象ごとに「送信済みのため送りません」のログが出て、メール送信スタブのログは配信対象ごとに 1 回だけ、DLQ にはメッセージが届かない（#136） | IT | 準正常系 |
 | 81 | `dev` で、4 つの関数の CloudWatch Logs の `REPORT` 行に出る `Init Duration` を記録する。続けて 2 回実行し、2 回目に `Init Duration` が出るかどうか（ウォームスタートか）と、LMI のデータ連携 Lambda で呼び出しのときに出るかどうかを見る。定時の起動の予定時刻から実行開始までの遅れも記録する（04「コールドスタート」。実施は #160、結果は 09「`dev` での検証結果」） | 手動 | 正常系 |
+| 82 | スキーマ: 実行入力・タスク入力の `rerunOf` は、省略と実行名の制約（80 文字以内、英数字・`-`・`_`）に合う値を受理し、空・81 文字・`/`・`:`・文字列でない値を拒否する。SQS メッセージ本文の `runKey` も同じ境界で受理・拒否し、無い本文を拒否する（#137） | UT | 準正常系 |
+| 83 | 投入: タスク入力に `rerunOf` があれば本文の `runKey` はその値、無ければ実行名になる。どちらでも重複排除 ID は `<実行名>:<配信対象 ID>` のまま変わらない（05「論理キー（runKey）」。#137） | UT | 正常系 |
+| 84 | 投入・データ連携: `rerunOf` が制約に合わなければ、キューに積まず・S3 に書かずに `ValidationError` で失敗する（#137） | UT | 準正常系 |
+| 85 | Consumer: 送信記録のキーを `<runKey>:<配信対象 ID>` で作る。同じ `runKey` の記録が「送信済み」の宛先は、実行名が違っても送らずに成功し、記録の無い宛先は送る（#137） | UT | 正常系 |
+| 86 | Consumer: 同じ `runKey` の記録が「送信中」なら、再実行のメッセージでも送らずに `SendStateUnknownError` で失敗させる（03「送信中のまま残った記録」。#137） | UT | 準正常系 |
+| 87 | データ連携: S3 のキーを `exports/<日付>/<runKey>.json` で作り、連携ファイル・BigQuery / Cuenote FC スタブの出力に `runKey` を入れる（#137） | UT | 正常系 |
+| 88 | `scripts/batch.sh` の `rerun`: 新しい実行名で、`rerunOf` に元の実行名を入れて起動する。元の実行の入力に `rerunOf` があればその値を引き継ぐ。元の `failAt` / `holdSeconds` は引き継がず、`rerun` に付けた値だけを渡す（#137） | UT | 正常系 |
+| 89 | `scripts/batch.sh` の `rerun`: 元の実行が見つからない・`RUNNING`・最初の実行の開始から 7 日を過ぎている・元の入力の `rerunOf` が制約に合わないときは、`start-execution` を呼ばずに 1 で終える（#137） | UT | 準正常系 |
+| 90 | `scripts/batch.sh` の `rerun`: `describe-execution` が失敗したら（認証切れ・接続先の誤り）、「見つからない」と区別したメッセージを出し、`start-execution` を呼ばずに 1 で終える（#137） | UT | 異常系 |
+| 91 | `failAt: "dataSync"` で失敗した実行を `rerun` すると、再実行が `SUCCEEDED` になる。メール送信スタブのログは配信対象ごとに元の実行の 1 回だけで、再実行では配信対象ごとに「送信済みのため送りません」が出る。S3 の同じキーのファイルが再実行の `executionName` で上書きされ、BigQuery / Cuenote FC スタブのログが `runKey` 付きで出る（#137） | IT | 準正常系 |
+| 92 | `failAt: "consumer"` の実行のメッセージが DLQ へ移った後に `rerun` すると、メール送信スタブのログが配信対象ごとに 1 回出る。再実行の投入が、元の実行の投入から 5 分以内であることも確かめる（5 分を超えたら、重複排除 ID を引き継がない理由を確かめられていないため失敗にする。05「メールメッセージ」。#137） | IT | 準正常系 |
 
 次のケースは、確かめている流れを 03「処理の流れ」の図で追える。
 
@@ -122,6 +133,7 @@
 | #7・#8（投入の一部の失敗） | 03「[投入の一部の失敗を `Retry` で送り直す](03-functional-specification.md#投入の一部の失敗を-retry-で送り直す)」 |
 | #11・#24（Consumer の不正な本文・同じグループの後続） | 03「[本文が不正なメッセージ（Consumer）](03-functional-specification.md#本文が不正なメッセージconsumer)」 |
 | #76・#77・#80（送信記録による二重送信の防止） | 03「[送った直後に落ちたメッセージの再配信](03-functional-specification.md#送った直後に落ちたメッセージの再配信failat-consumeraftersend)」 |
+| #85・#91（再実行で送れていたメールを送らない） | 03「[失敗の後の再実行](03-functional-specification.md#失敗の後の再実行)」 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 
@@ -129,7 +141,8 @@ IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で
 - **キューに積まれないこと（#25）は、そのケースの間だけ Consumer のイベントソースマッピングを無効にして、キューを直接受信して確かめる。** Consumer が動いていると、積まれたメッセージは数秒で受け取られて消えるため、壊れていても空に見える。途中で止まった IT が Consumer を止めたまま残しても、次の IT の開始時に有効へ戻す
 - **`TIMED_OUT`（#32）は、その実行の間だけステートマシンの定義を書き換えて起こす。** 先頭に 10 秒の Wait ステートを足し、実行全体のタイムアウトを 2 秒にする。本番のタイムアウト（40 分）を待たずに済み、Lambda も呼ばれない。ARN は変わらないため、本番と同じ rule を通る。CDK のテンプレートは変わらないため再デプロイでは戻らず、途中で止まった IT が書き換えたまま残したら、次の IT の開始時に戻す（元のタイムアウトは書き換えた定義の Wait ステートに残す）。`error` / `cause` が `null` であることも確かめる。実 AWS でも値が無いことを手動で確かめた（#34）ため、LocalStack と同じ期待値でよい
 - **ハートビート切れ（#54）も、その実行の間だけ定義を書き換えて起こす。** `DataSync` の `HeartbeatSeconds` を 2 秒にし、`holdSeconds: 10` で実行する。関数は待ちの始めに 1 回だけハートビートを送るため、本番のハートビート（300 秒）を待たずに、結果を返す前に切れる。元のハートビートは書き換えた `DataSync` の `Comment` に残し、途中で止まった IT が書き換えたまま残したら、次の IT の開始時に戻す。期待するエラー名 `States.Timeout` は LocalStack で観測した値で、**実 AWS の値は未観測**（09「LocalStack での検証結果」）。実 AWS で違う値だった場合は、この期待値を `local` 専用として扱う
-- **ケースは順番に実行し、`consumer`（#22）を最後に置く。** グループは配信対象ごとで実行をまたいで共有されるため、失敗し続けるメッセージが他のケースのメッセージを巻き込む（05「メールメッセージ」）
+- **ケースは順番に実行し、`consumer`（#22）を最後に置く。** グループは配信対象ごとで実行をまたいで共有されるため、失敗し続けるメッセージが他のケースのメッセージを巻き込む（05「メールメッセージ」）。その再実行（#92）は #22 の続きとして、#22 が DLQ へ移るのを待った直後に行う
+- **再実行（#91・#92）は `scripts/batch.sh` の `rerun` を通して起動する。** 実行入力を IT で組み立てると、スクリプトの引き継ぎ（`rerunOf`・`failAt` を引き継がないこと）が IT の外に残るため。メール送信スタブのログは、再実行の実行名ではなく最初の実行の名前（`runKey`）で絞り込み、元の実行と再実行を合わせて数える
 - **「出ない」ことは、先に出るはずのログ（Slack スタブ等）を確認してから一定時間待って確かめる。** すぐに見て 0 件だと、処理がまだ届いていないだけでも通ってしまう
 - 前提（LocalStack の起動・デプロイ）が無ければ、スキップではなく失敗で終える
 
@@ -151,7 +164,7 @@ Lint 設定そのものも検査の対象にする。`test/lint/jsdoc.test.ts` �
 | 対象 | 実行 | CI |
 |---|---|---|
 | UT（handler・スキーマ・CDK）と型検査・Lint・整形 | `npm test` / `npm run typecheck` / `npm run lint` / `npm run format:check` | PR で毎回実行し、マージの必須チェックにする（`ci.yml` の `check`。09「CI とマージの条件」）。ドキュメント・ルールだけの変更ではスキップする |
-| IT | `./scripts/localstack.sh up` → `./scripts/stack.sh local up` の後に `npm run test:it`（約 6 分。#22 で DLQ へ移るまで待つため・#35 で 61 秒待つため） | PR で毎回実行する（`ci.yml` の `it`。約 12 分の見込み。内訳は起動 1 分・デプロイ 2 分・IT 6 分（手元で計測）・削除 2 分）。マージの必須チェックにする。ドキュメント・ルールだけの変更ではスキップする。認証トークンはリポジトリのシークレット `LOCALSTACK_AUTH_TOKEN` から渡すため、トークンの渡らない fork からの PR では落ちる。Dependabot の PR には Dependabot 用のシークレットから渡る（09「LocalStack の認証」） |
+| IT | `./scripts/localstack.sh up` → `./scripts/stack.sh local up` の後に `npm run test:it`（約 7 分。2026-11-09 に手元で 436 秒。#22 で DLQ へ移るまで待つため・#35 で 61 秒待つため・#91・#92 で再実行するため） | PR で毎回実行する（`ci.yml` の `it`。約 13 分の見込み。内訳は起動 1 分・デプロイ 2 分・IT 7 分（手元で計測）・削除 2 分）。マージの必須チェックにする。ドキュメント・ルールだけの変更ではスキップする。認証トークンはリポジトリのシークレット `LOCALSTACK_AUTH_TOKEN` から渡すため、トークンの渡らない fork からの PR では落ちる。Dependabot の PR には Dependabot 用のシークレットから渡る（09「LocalStack の認証」） |
 | 手動確認 | 03「操作方針」の手順 | 対象外 |
 
 ## 原則

@@ -54,11 +54,14 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 | 実行入力 `failAt` | 省略、または `enqueue` / `dataSync` / `consumer` のいずれか | `ValidationError` で失敗する（リトライしない） |
 | 実行入力 `holdSeconds` | 省略、または 0〜1,200 の整数 | `ValidationError` で失敗する（リトライしない） |
 | 投入・データ連携 Lambda の `executionName` | 空でない文字列。80 文字以内、英数字・`-`・`_` のみ | `ValidationError` で失敗する |
+| 実行入力 `rerunOf` | 省略、または `executionName` と同じ制約の文字列（#137） | `ValidationError` で失敗する（リトライしない） |
 | データ連携 Lambda の `taskToken` | 1〜2,048 文字の文字列（`SendTask*` の制約） | 結果を返せないため、エラーログを出して終える。`DataSync` はハートビートのタイムアウトで失敗する。投入 Lambda のタスク入力では未知のキーとして拒否する |
 | SQS メッセージ本文 | JSON として読め、05「メールメッセージ」の全フィールドを持つ。`email` はメールアドレス形式 | その 1 件を失敗として返す（3 回で DLQ） |
 | EventBridge イベント | `detail-type` が `Step Functions Execution Status Change`、`detail.status` が通知対象の 3 状態のいずれか | 警告ログを出して正常終了する |
 
-`executionName` は S3 のキーと SQS の重複排除 ID（送信記録のキーも同じ値）に入るため、文字を制限してキーの区切り（`/`）を含ませない。
+`executionName` は SQS の重複排除 ID に、`rerunOf` から作る論理キー（`rerunOf` が無ければ `executionName`。05「論理キー（runKey）」）は S3 のキーと送信記録のキーに入る。どちらも文字を制限して、キーの区切り（`/`・`:`）を含ませない。SQS メッセージ本文の `runKey` も同じ制約で検証する（上の表の「SQS メッセージ本文」）。
+
+`rerunOf` が実在する実行の名前かどうかは、Lambda では確かめない（`states:DescribeExecution` の権限を足さない）。確かめるのは `scripts/batch.sh` の `rerun` で、存在しない・実行中の実行は起動する前に断る（03「失敗の後の再実行」）。実行入力を直接組み立てて存在しない名前を渡すと、その名前を論理キーとして全件を送る。後で同じ名前の実行が起動されると、その実行のメールは送信記録の期限（7 日）の間、送信済みとして送られない。手で組み立てた入力でだけ起きるため、再実行は `rerun` を通して起動する。
 
 ## データ保護
 
@@ -76,7 +79,7 @@ IAM ロールは Terraform が作り、CDK は `mutable: false` で参照する�
 
 外部から到達できる入口が無いため、XSS・CSRF・CORS は対象外。SQL も発行しない（MySQL はスタブ）。
 
-- **インジェクション**: 入力値を S3 のキー・重複排除 ID に埋め込むため、`executionName` を文字種で制限する（上記「入力バリデーション」）
+- **インジェクション**: 入力値を S3 のキー・重複排除 ID・送信記録のキーに埋め込むため、`executionName` と `rerunOf` を文字種で制限する（上記「入力バリデーション」）
 - **依存パッケージ**: npm の依存は `package-lock.json` で固定し、npm と GitHub Actions の更新を Dependabot で追う（`.github/dependabot.yml`）。公開から 7 日待ってから提案させ、公開直後に取り下げられる版を避ける（セキュリティ更新は待たない）。Terraform provider・LocalStack のイメージ・`run:` 内のバージョンは対象外で、手で更新する
 - **秘匿ファイルの混入**: `scripts/check-secret-files.sh` を CI で常時実行する（`static-analysis.md`）
 - **秘密情報の push**: GitHub の Secret scanning と push protection を有効にしている。トークンの形をした文字列を含む push は GitHub が拒否し、既に入ったものはアラートになる。ファイル名で見る上の検査と、中身の形で見るこちらを重ねる

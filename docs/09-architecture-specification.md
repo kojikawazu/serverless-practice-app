@@ -342,7 +342,7 @@ main へは PR を通してしか入れず、次の必須チェックがすべ�
 | `check`（型検査・Lint・整形・UT） / `terraform` / `it` | `ci.yml` | skipped（成功として扱われる） |
 
 - **`changes` も必須にする。** `check` などは `changes` の結果で動くかを決めるため、`changes` が落ちると skipped になり、skipped は必須チェックを通る。判定が落ちたまま重い検査を飛ばして緑にしないよう、判定そのものを必須にする
-- **ブランチを最新にしてからのマージは求めない**（ruleset の `strict` は `false`）。PR を 1 本ずつ順に出すため、毎回 rebase して IT（約 12 分）を回し直す手間に見合わない
+- **ブランチを最新にしてからのマージは求めない**（ruleset の `strict` は `false`）。PR を 1 本ずつ順に出すため、毎回 rebase して IT（約 13 分）を回し直す手間に見合わない
 - **承認は 0 件でよい。** 一人で開発するため。マージは人が行う（`git.md`）。管理者も ruleset を迂回できない（bypass なし）
 - **fork からの PR は `it` が落ちてマージできない。** リポジトリのシークレット（`LOCALSTACK_AUTH_TOKEN`）は fork の PR に渡らない。スキップして緑にはしない（`ci.yml` の `it`）。取り込むときは手元で IT を通す。Dependabot の PR は fork ではないが、Actions のシークレットではなく Dependabot のシークレットから受け取る（上記「LocalStack の認証」）
 - ジョブ名を変えると、必須チェックが来ない結果を待ち続けて PR が `pending` のまま止まる。ジョブ名を変えたら ruleset も直す

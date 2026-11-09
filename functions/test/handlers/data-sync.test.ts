@@ -141,6 +141,7 @@ describe("dataSync", () => {
       expect(typeof body).toBe("string");
       expect(JSON.parse(body as string)).toEqual({
         executionName: "run-1",
+        runKey: "run-1",
         exportedAt: "2026-10-08T03:04:05.678Z",
         recipients: [
           {
@@ -172,6 +173,7 @@ describe("dataSync", () => {
         message: "データ連携を完了しました",
         function: "data-sync",
         executionName: "run-1",
+        runKey: "run-1",
         exported: 3,
         s3Key: "exports/2026-10-08/run-1.json",
       });
@@ -317,11 +319,14 @@ describe("dataSync", () => {
       expect(puts()[0]?.Key).toBe("exports/2026-10-07/run-1.json");
     });
 
-    it("同じ実行名で再実行すると同じキーに書く（上書き）", async () => {
+    it("同じ日に rerunOf で再実行すると、元の実行と同じキーに書く（上書き）", async () => {
       const { deps } = setup();
 
       await dataSync({ executionName: "run-1", taskToken: TOKEN }, deps);
-      await dataSync({ executionName: "run-1", taskToken: TOKEN }, deps);
+      await dataSync(
+        { executionName: "rerun-1", rerunOf: "run-1", taskToken: TOKEN },
+        deps,
+      );
 
       expect(puts().map((put) => put.Key)).toEqual([
         "exports/2026-10-08/run-1.json",
@@ -386,6 +391,7 @@ describe("dataSync", () => {
           level: "ERROR",
           message: "データ連携に失敗しました",
           executionName: "run-1",
+          runKey: "run-1",
           errorName: "InjectedFailureError",
         }),
       ]);
@@ -473,6 +479,56 @@ describe("dataSync", () => {
         errorMessage: "x".repeat(4096),
       });
     });
+  });
+});
+
+describe("dataSync（再実行。#137）", () => {
+  describe("正常系", () => {
+    it("rerunOf があれば、S3 のキーと連携ファイル・スタブの出力の runKey をその値にする", async () => {
+      const { deps, records } = setup();
+
+      await dataSync(
+        { executionName: "rerun-1", rerunOf: "run-1", taskToken: TOKEN },
+        deps,
+      );
+
+      expect(puts()[0]?.Key).toBe("exports/2026-10-08/run-1.json");
+      expect(JSON.parse(puts()[0]?.Body as string)).toMatchObject({
+        executionName: "rerun-1",
+        runKey: "run-1",
+      });
+      expect(
+        records()
+          .filter((r) => r.stub !== undefined)
+          .map((r) => [r.stub, r.executionName, r.runKey]),
+      ).toEqual([
+        ["bigquery", "rerun-1", "run-1"],
+        ["cuenote-fc", "rerun-1", "run-1"],
+      ]);
+    });
+  });
+
+  describe("準正常系", () => {
+    it.each([
+      ["/ を含む", "a/b"],
+      [": を含む", "a:b"],
+      ["文字列でない", 1],
+    ])(
+      "rerunOf が制約に合わない（%s）と、S3 に書かずに ValidationError を返す",
+      async (_label, rerunOf) => {
+        const { deps } = setup();
+
+        await dataSync(
+          { executionName: "rerun-1", rerunOf, taskToken: TOKEN },
+          deps,
+        );
+
+        expect(puts()).toEqual([]);
+        expect(
+          sfnMock.commandCalls(SendTaskFailureCommand)[0]?.args[0].input.error,
+        ).toBe("ValidationError");
+      },
+    );
   });
 });
 

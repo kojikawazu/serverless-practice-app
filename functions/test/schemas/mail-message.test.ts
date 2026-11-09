@@ -4,11 +4,49 @@ import { mailMessageSchema } from "../../src/schemas/mail-message";
 /** 検証を通る本文。各ケースはここから 1 項目だけ変えて境界を確かめる */
 const VALID = {
   executionName: "manual-20261008-001",
+  runKey: "manual-20261008-001",
   recipientId: "r-001",
   email: "user1@example.com",
   subject: "serverless-practice-app デモ配信",
   simulateFailure: "none",
 };
+
+describe("mailMessageSchema の runKey（論理キー。#137）", () => {
+  describe("正常系", () => {
+    it.each(["rerun-1", "a".repeat(80)])(
+      "実行名と違う値・80 文字の runKey %j を受理する",
+      (runKey) => {
+        expect(mailMessageSchema.parse({ ...VALID, runKey }).runKey).toBe(
+          runKey,
+        );
+      },
+    );
+  });
+
+  describe("準正常系", () => {
+    it.each(["", "a/b", "a:b", "a".repeat(81)])(
+      "実行名の制約に合わない runKey %j を拒否する（送信記録のキーを壊さない）",
+      (runKey) => {
+        expect(mailMessageSchema.safeParse({ ...VALID, runKey }).success).toBe(
+          false,
+        );
+      },
+    );
+
+    it("runKey の無い本文（#137 より前に積まれたもの）を拒否する", () => {
+      const { runKey: _omitted, ...legacy } = VALID;
+      expect(mailMessageSchema.safeParse(legacy).success).toBe(false);
+    });
+  });
+
+  describe("異常系", () => {
+    it.each([1, null])("文字列でない runKey %j を拒否する", (runKey) => {
+      expect(mailMessageSchema.safeParse({ ...VALID, runKey }).success).toBe(
+        false,
+      );
+    });
+  });
+});
 
 describe("mailMessageSchema（SQS メッセージ本文）", () => {
   describe("正常系", () => {

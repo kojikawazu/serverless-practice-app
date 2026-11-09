@@ -20,6 +20,7 @@ export class SendGridStub implements MailSender {
     this.logger.info("メールを送信しました（スタブ）", {
       stub: "sendgrid",
       executionName: mail.executionName,
+      runKey: mail.runKey,
       recipientId: mail.recipientId,
       to: mail.to,
       subject: mail.subject,

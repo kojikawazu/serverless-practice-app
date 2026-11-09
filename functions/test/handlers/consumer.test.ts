@@ -63,7 +63,7 @@ class InMemorySendRecordStore implements SendRecordStore {
 }
 
 /**
- * 有効なメール本文を作る。
+ * 有効なメール本文を作る。論理キーは、上書きしなければ実行名と同じ（再実行ではない実行の本文）。
  *
  * @param recipientId - 配信対象 ID（`r-001` 形式）
  * @param overrides - 上書きする項目
@@ -74,8 +74,10 @@ function mail(
   overrides: Partial<MailMessage> = {},
 ): MailMessage {
   const n = Number(recipientId.slice(2));
+  const executionName = overrides.executionName ?? "run-1";
   return {
-    executionName: "run-1",
+    executionName,
+    runKey: executionName,
     recipientId,
     email: `user${n}@example.com`,
     subject: "件名",
@@ -138,14 +140,25 @@ describe("consume", () => {
       expect(sentRecipients()).toEqual(ids);
     });
 
-    it("本文の宛先・件名・実行名を送信内容に渡す", async () => {
+    it("本文の宛先・件名・実行名・論理キーを送信内容に渡す", async () => {
       const { deps, records } = setup();
 
-      await consume({ Records: [record("m1", mail("r-001"))] }, deps);
+      await consume(
+        {
+          Records: [
+            record(
+              "m1",
+              mail("r-001", { executionName: "rerun-1", runKey: "run-1" }),
+            ),
+          ],
+        },
+        deps,
+      );
 
       expect(records()[0]).toMatchObject({
         stub: "sendgrid",
-        executionName: "run-1",
+        executionName: "rerun-1",
+        runKey: "run-1",
         to: "user1@example.com",
         subject: "件名",
       });
@@ -342,7 +355,7 @@ describe("consume（送信記録による二重送信の防止。#136）", () =>
       expect([...sendRecords.states]).toEqual([["run-1:r-001", "SENT"]]);
     });
 
-    it("実行名が違えば同じ宛先でも別のメールとして送る", async () => {
+    it("論理キーが違えば（run で起動し直した実行）、同じ宛先でも別のメールとして送る", async () => {
       const { deps, sentRecipients } = setup();
 
       await consume({ Records: [record("m1", mail("r-001"))] }, deps);
@@ -500,6 +513,80 @@ describe("consume（送信記録による二重送信の防止。#136）", () =>
       });
 
       expect(sentRecipients()).toEqual(["r-001"]);
+    });
+  });
+});
+
+describe("consume（再実行で、送れていたメールを送らない。#137）", () => {
+  /** 最初の実行 run-1 を、rerun-1 として再実行したときの本文 */
+  const rerunMail = (recipientId: string) =>
+    mail(recipientId, { executionName: "rerun-1", runKey: "run-1" });
+
+  describe("正常系", () => {
+    it("送信記録のキーを、実行名ではなく <論理キー>:<配信対象 ID> で作る", async () => {
+      const { deps, sendRecords } = setup();
+
+      await consume({ Records: [record("m1", rerunMail("r-001"))] }, deps);
+
+      expect([...sendRecords.states]).toEqual([["run-1:r-001", "SENT"]]);
+    });
+
+    it("同じ論理キーで送信済みの宛先は、実行名が違っても送らずに成功し、記録の無い宛先は送る", async () => {
+      const { deps, sentRecipients, sendRecords, records } = setup();
+      // 最初の実行で r-001 だけ送れていた
+      sendRecords.states.set("run-1:r-001", "SENT");
+
+      const result = await consume(
+        {
+          Records: [
+            record("m1", rerunMail("r-001")),
+            record("m2", rerunMail("r-002")),
+          ],
+        },
+        deps,
+      );
+
+      expect(result).toEqual({ batchItemFailures: [] });
+      expect(sentRecipients()).toEqual(["r-002"]);
+      expect(records()).toContainEqual(
+        expect.objectContaining({
+          message: "送信済みのため送りません",
+          messageKey: "run-1:r-001",
+        }),
+      );
+    });
+  });
+
+  describe("準正常系", () => {
+    it("同じ論理キーの送信中の記録が残っていたら、再実行のメッセージでも送らずに SendStateUnknownError で失敗させる", async () => {
+      const { deps, sentRecipients, sendRecords, records } = setup();
+      sendRecords.states.set("run-1:r-001", "SENDING");
+
+      const result = await consume(
+        { Records: [record("m1", rerunMail("r-001"))] },
+        deps,
+      );
+
+      expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: "m1" }] });
+      expect(sentRecipients()).toEqual([]);
+      expect(sendRecords.states.get("run-1:r-001")).toBe("SENDING");
+      expect(records()).toContainEqual(
+        expect.objectContaining({ errorName: "SendStateUnknownError" }),
+      );
+    });
+
+    it("runKey の無い本文（#137 より前に積まれたもの）は、送らずに失敗として返す", async () => {
+      const { deps, sentRecipients, sendRecords } = setup();
+      const { runKey: _omitted, ...legacy } = mail("r-001");
+
+      const result = await consume(
+        { Records: [record("m1", JSON.stringify(legacy), "r-001")] },
+        deps,
+      );
+
+      expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: "m1" }] });
+      expect(sentRecipients()).toEqual([]);
+      expect(sendRecords.states.size).toBe(0);
     });
   });
 });

@@ -5,10 +5,13 @@ import {
   findExportKeys,
   findSkippedMessageKeys,
   findStubLogs,
+  findStubLogsByRunKey,
   findTaskTimedOutEvents,
   pollUntil,
   purgeQueue,
+  readExportFile,
   receiveRecipientIds,
+  rerunWithScript,
   resolveResources,
   restoreDataSyncHeartbeat,
   restoreExecutionTimeout,
@@ -20,7 +23,7 @@ import {
 } from "./helpers/localstack";
 import type { DeployedResources } from "./helpers/localstack";
 
-// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27・#32・#54・#80）。
+// docs/02「受け入れ条件」のうち local で確かめられるものを、デプロイ済みの LocalStack で確かめる（docs/08 #20〜#22・#25〜#27・#32・#54・#80・#91・#92）。
 // 前提: scripts/localstack.sh up → scripts/stack.sh local up
 //
 // ケースは順番に実行する（concurrent を付けない。同じファイルのテストは既定で順番に走る）。
@@ -41,11 +44,23 @@ const DLQ_TIMEOUT_MS = 330_000;
 /** 送った直後の失敗の後、再配信で送信済みとして飛ばすまで待つ最大時間（ミリ秒）。可視性タイムアウト 60 秒に余裕を足す（docs/04「リトライ」） */
 const REDELIVERY_TIMEOUT_MS = 180_000;
 
+/**
+ * SQS FIFO の重複排除の期間（ミリ秒）。#92 は、再実行がこの期間の内に起動したことを確かめる。
+ * 期間を過ぎてから再実行すると、重複排除 ID を引き継いでいても捨てられないため、引き継がない理由を確かめたことにならない（docs/05「メールメッセージ」）
+ */
+const DEDUPLICATION_WINDOW_MS = 5 * 60 * 1000;
+
 /** IT の 1 回の実行を区別する接頭辞。前回の IT や手動実行のログ・ファイルと混ざらないよう、確認はすべて実行名で絞り込む */
 const RUN_ID = `it-${Date.now().toString(36)}`;
 
 let resources: DeployedResources;
 let recipientIds: string[];
+
+/** consumer のケースの実行名。その再実行のケース（#92）が引き継ぐ */
+const CONSUMER_CASE_NAME = `${RUN_ID}-consumer`;
+
+/** consumer のケースの実行が始まった時刻。再実行が重複排除の期間の内かを確かめるために、次のケースが読む */
+let consumerCaseStartedAt: Date | undefined;
 
 beforeAll(async () => {
   resources = await resolveResources();
@@ -265,6 +280,51 @@ describe("バッチの実行（LocalStack）", () => {
     ]);
   });
 
+  it('failAt: "dataSync" の実行を rerun で再実行する: SUCCEEDED になり、メールは元の実行の 1 通ずつだけで、S3 の同じキーに上書きし、BigQuery・Cuenote FC へ runKey 付きで書く（#137）', async () => {
+    const name = `${RUN_ID}-rerun-datasync`;
+    const original = await runExecution(resources.stateMachineArn, name, {
+      failAt: "dataSync",
+    });
+    expect(original.status).toBe("FAILED");
+    // 元の実行のメールが送り終わるのを待ってから再実行する（再実行の判定の前提を作る）
+    await pollUntil(
+      () => findStubLogs("consumer", name, "sendgrid"),
+      (found) => found.length >= recipientIds.length,
+      LOG_TIMEOUT_MS,
+    );
+
+    const rerun = await rerunWithScript(resources.stateMachineArn, name);
+
+    expect(rerun.status).toBe("SUCCEEDED");
+    expect(JSON.parse(rerun.input ?? "")).toEqual({ rerunOf: name });
+    // 再実行は配信対象ごとに「送信済みのため送りません」を出し、送らない
+    const skipped = await pollUntil(
+      () => findSkippedMessageKeys(name),
+      (keys) => keys.length >= recipientIds.length,
+      LOG_TIMEOUT_MS,
+    );
+    expect(skipped.sort()).toEqual(recipientIds.map((id) => `${name}:${id}`));
+    await sleep(ABSENCE_GRACE_MS);
+    const sent = await findStubLogsByRunKey("consumer", name, "sendgrid");
+    expect(
+      sent.map((log) => [log.executionName, log.recipientId]).sort(),
+    ).toEqual(recipientIds.map((id) => [name, id]));
+    // 連携ファイルは同じキーの 1 つだけで、中身は再実行が書いたもの
+    const keys = await findExportKeys(resources.bucketName, name);
+    expect(keys).toHaveLength(1);
+    expect(
+      await readExportFile(resources.bucketName, keys[0] ?? ""),
+    ).toMatchObject({
+      executionName: rerun.name,
+      runKey: name,
+    });
+    for (const stub of ["bigquery", "cuenote-fc"]) {
+      expect(await findStubLogsByRunKey("data-sync", name, stub)).toEqual([
+        expect.objectContaining({ executionName: rerun.name, runKey: name }),
+      ]);
+    }
+  }, 300_000);
+
   // 再配信まで可視性タイムアウトの間グループが止まるため、他のケースの後・consumer のケースの前に置く
   it('failAt: "consumerAfterSend": SUCCEEDED になり、送った直後の失敗で再配信されても、メールは配信対象ごとに 1 通だけ送られる（#136）', async () => {
     const name = `${RUN_ID}-after-send`;
@@ -290,11 +350,12 @@ describe("バッチの実行（LocalStack）", () => {
 
   // 他のケースのメッセージを巻き込まないよう最後に置く（ファイル先頭のコメント）
   it('failAt: "consumer": SUCCEEDED のまま、配信対象の件数のメッセージが DLQ へ移り、実行の失敗としては Slack スタブに出ない', async () => {
-    const name = `${RUN_ID}-consumer`;
+    const name = CONSUMER_CASE_NAME;
 
     const execution = await runExecution(resources.stateMachineArn, name, {
       failAt: "consumer",
     });
+    consumerCaseStartedAt = execution.startDate;
 
     expect(execution.status).toBe("SUCCEEDED");
     const inDlq = new Set<string>();
@@ -315,5 +376,35 @@ describe("バッチの実行（LocalStack）", () => {
     // LocalStack はアラームの状態変化を EventBridge に出さないため、アラームの通知は IT では確かめない（docs/02「F-5」・#135）
     expect(await findStubLogs("notify-slack", name, "slack")).toEqual([]);
     expect(await findStubLogs("consumer", name, "sendgrid")).toEqual([]);
+  }, 420_000);
+
+  // 直前の consumer のケースの続き。DLQ へ移った直後に再実行し、重複排除の期間（5 分）の内に起動する
+  it('failAt: "consumer" の実行を、DLQ へ移った後に rerun で再実行する: 元の実行から 5 分以内でも、メールが配信対象ごとに 1 通送られる（#137）', async () => {
+    const name = CONSUMER_CASE_NAME;
+    if (consumerCaseStartedAt === undefined) {
+      throw new Error(
+        "前のケース（failAt: consumer）が実行を起動していないため、再実行を確かめられません",
+      );
+    }
+
+    const rerun = await rerunWithScript(resources.stateMachineArn, name);
+
+    expect(rerun.status).toBe("SUCCEEDED");
+    // 期間を過ぎてから起動していたら、重複排除 ID を引き継がない理由を確かめたことにならないため失敗にする
+    expect(
+      (rerun.startDate?.getTime() ?? Infinity) -
+        consumerCaseStartedAt.getTime(),
+    ).toBeLessThan(DEDUPLICATION_WINDOW_MS);
+    await pollUntil(
+      () => findStubLogsByRunKey("consumer", name, "sendgrid"),
+      (found) => found.length >= recipientIds.length,
+      LOG_TIMEOUT_MS,
+    );
+    await sleep(ABSENCE_GRACE_MS);
+    expect(
+      (await findStubLogsByRunKey("consumer", name, "sendgrid"))
+        .map((log) => [log.executionName, log.recipientId])
+        .sort(),
+    ).toEqual(recipientIds.map((id) => [rerun.name, id]));
   }, 420_000);
 });

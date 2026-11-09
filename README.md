@@ -81,17 +81,18 @@ npm test              # Vitest + カバレッジ（functions/src の行カバレ
 ./scripts/stack.sh local down  # CDK → Terraform の順に消す
 ```
 
-バッチの実行と結果の確認は `batch.sh` で行います。`failAt` で失敗を、`--hold-seconds` でデータ連携の遅延を注入できます（[02「F-6」](docs/02-requirements-specification.md#f-6-失敗の注入)）。
+バッチの実行と結果の確認は `batch.sh` で行います。`failAt` で失敗を、`--hold-seconds` でデータ連携の遅延を注入できます（[02「F-6」](docs/02-requirements-specification.md#f-6-失敗の注入)）。失敗した実行は `rerun` で、送れていたメールを送り直さずに再実行できます（[03「失敗の後の再実行」](docs/03-functional-specification.md#失敗の後の再実行)）。
 
 ```bash
 ./scripts/batch.sh local run                   # 起動し、終わるまで待って状態・エラーを出す
 ./scripts/batch.sh local run dataSync          # enqueue / dataSync / consumer / consumerAfterSend のいずれかで失敗を注入する
 ./scripts/batch.sh dev run --hold-seconds 960  # データ連携が結果を返す前に 960 秒待つ（0〜1,200。待つ上限は 360 秒 + この秒数）
-./scripts/batch.sh local logs <実行名>         # 4 つの Lambda のログから、その実行の行だけを出す
+./scripts/batch.sh local rerun <実行名>        # 失敗した実行を、論理キーを引き継いで再実行する（failAt / --hold-seconds も付けられる）
+./scripts/batch.sh local logs <実行名>         # 4 つの Lambda のログから、その実行の行だけを出す（最初の実行の名前なら再実行の行も出る）
 ./scripts/batch.sh local dlq                   # DLQ のメッセージ数を出す
 ```
 
-受け入れ条件（[02](docs/02-requirements-specification.md#受け入れ条件)）と `tfstate-bucket.sh` は IT でまとめて確かめられます。LocalStack の起動とデプロイが前提で、約 6 分かかります。CI（`ci.yml` の `it`）も同じスクリプトを同じ順で実行します。
+受け入れ条件（[02](docs/02-requirements-specification.md#受け入れ条件)）と `tfstate-bucket.sh` は IT でまとめて確かめられます。LocalStack の起動とデプロイが前提で、約 7 分かかります。CI（`ci.yml` の `it`）も同じスクリプトを同じ順で実行します。
 
 ```bash
 npm run test:it

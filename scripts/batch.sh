@@ -7,10 +7,15 @@
 #                                            実行を起動し、終わるまで待って結果を出す
 #                                            failAt: enqueue / dataSync / consumer / consumerAfterSend（省略で失敗を注入しない）
 #                                            --hold-seconds: データ連携 Lambda が結果を返す前に待つ秒数（docs/02「F-6」）
+#   scripts/batch.sh <stage> rerun <元の実行名> [failAt] [--hold-seconds <秒>]
+#                                            失敗した実行を、論理キーを引き継いで再実行する（docs/03「失敗の後の再実行」）。
+#                                            実行入力の rerunOf に最初の実行の名前を入れる。元の failAt / holdSeconds は引き継がない
+#                                            元の実行が見つからない・実行中・最初の実行の開始から 7 日を過ぎているときは起動せずに 1 で終える
 #   scripts/batch.sh <stage> logs <実行名>   4 つの Lambda のログから、その実行名を含む行だけを出す
+#                                            最初の実行の名前を渡すと、再実行の行も出る（ログに runKey があるため）
 #   scripts/batch.sh <stage> dlq             DLQ のメッセージ数を出す
 #
-# run の終了コードは、実行が終わったかどうかで決まる（SUCCEEDED / FAILED のどちらでも 0）。
+# run / rerun の終了コードは、実行が終わったかどうかで決まる（SUCCEEDED / FAILED のどちらでも 0）。
 # 失敗の注入では FAILED が期待どおりの結果のため。待っても終わらなかった場合だけ 1 で終える
 # （終わったかどうか分からない状態を、成功扱いにしない）。
 #
@@ -28,9 +33,15 @@ BASE_WAIT_SECONDS=360
 # holdSeconds の上限（docs/02「データ項目」）。これを超える値は検証エラーですぐ終わるため、待つ秒数に足さない
 MAX_HOLD_SECONDS=1200
 FUNCTIONS="enqueue consumer data-sync notify-slack"
+# 再実行を受け付ける期間（秒）。送信記録の期限（7 日。docs/04「保持期間」）を過ぎると、送れていたメールの記録が
+# 消えている可能性があり、送り直しうる。期限は記録を書いた時刻から数えるため、最初の実行の開始から数えれば安全側になる
+RERUN_WINDOW_SECONDS=$((7 * 24 * 60 * 60))
+# 実行名の制約（docs/06「入力バリデーション」）。rerunOf として渡す値も同じ制約で Lambda が検証する
+EXECUTION_NAME_PATTERN='^[A-Za-z0-9_-]{1,80}$'
 
 usage() {
   echo "使い方: $0 {local|dev} run [enqueue|dataSync|consumer|consumerAfterSend] [--hold-seconds <秒>]" >&2
+  echo "        $0 {local|dev} rerun <元の実行名> [enqueue|dataSync|consumer|consumerAfterSend] [--hold-seconds <秒>]" >&2
   echo "        $0 {local|dev} logs <実行名>" >&2
   echo "        $0 {local|dev} dlq" >&2
   exit 2
@@ -65,9 +76,13 @@ state_machine_arn() {
   printf '%s' "$arn"
 }
 
-run() {
-  # bash 3.2 の set -u では空の配列を展開できないため、配列を使わずに受ける
-  local fail_at="" has_fail_at=0 hold_seconds="" has_hold_seconds=0
+# run / rerun の引数（failAt・--hold-seconds）を読む。誤りなら、AWS を呼ぶ前に使い方を出して止める。
+# bash 3.2 には変数の参照渡しが無く、set -u では空の配列を展開できないため、結果はグローバル変数で受け渡す
+fail_at=""
+has_fail_at=0
+hold_seconds=""
+has_hold_seconds=0
+parse_start_args() {
   while (($# > 0)); do
     case "$1" in
       --hold-seconds)
@@ -86,21 +101,29 @@ run() {
         ;;
     esac
   done
+}
+
+# 実行入力を組み立てて起動し、終わるまで待って結果を出す（run / rerun 共通）。
+# 引数: ステートマシンの ARN、実行名の接頭辞（manual / rerun）、rerunOf（再実行でなければ空）
+start_and_wait() {
+  local arn="$1" name_prefix="$2" rerun_of="$3"
 
   # 未定義の値も、そのまま渡せるようにする（検証エラーで FAILED になることを確かめるため。docs/02「F-6」）。
   # holdSeconds は JSON の数値として読める形（1.5・-1 を含む）なら数値で、それ以外は文字列で渡す
   local input
   input="$(python3 -c '
 import json, re, sys
-has_fail_at, fail_at, has_hold_seconds, hold_seconds = sys.argv[1:]
+has_fail_at, fail_at, has_hold_seconds, hold_seconds, rerun_of = sys.argv[1:]
 body = {}
+if rerun_of != "":
+    body["rerunOf"] = rerun_of
 if has_fail_at == "1":
     body["failAt"] = fail_at
 if has_hold_seconds == "1":
     is_number = re.fullmatch(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?", hold_seconds)
     body["holdSeconds"] = json.loads(hold_seconds) if is_number else hold_seconds
 print(json.dumps(body))
-' "$has_fail_at" "$fail_at" "$has_hold_seconds" "$hold_seconds")"
+' "$has_fail_at" "$fail_at" "$has_hold_seconds" "$hold_seconds" "$rerun_of")"
 
   local wait_seconds="${BATCH_WAIT_SECONDS:-}"
   if [[ -z "$wait_seconds" ]]; then
@@ -111,10 +134,9 @@ print(json.dumps(body))
     fi
   fi
 
-  local arn name execution_arn
-  arn="$(state_machine_arn)"
+  local name execution_arn
   # 実行名の形式は docs/07 の例（manual-YYYYMMDD-...）に合わせる。秒まで入れて手動の連続実行でも衝突させない
-  name="manual-$(date +%Y%m%d-%H%M%S)"
+  name="${name_prefix}-$(date +%Y%m%d-%H%M%S)"
   execution_arn="$(aws stepfunctions start-execution \
     --state-machine-arn "$arn" --name "$name" --input "$input" \
     --query executionArn --output text)"
@@ -147,6 +169,96 @@ print("原因: " + (cause if cause is not None else "-"))
   return 1
 }
 
+run() {
+  parse_start_args "$@"
+  local arn
+  arn="$(state_machine_arn)"
+  start_and_wait "$arn" manual ""
+}
+
+# 実行を describe-execution で読み、「状態|rerunOf|開始時刻（エポック秒）」を 1 行で出す。
+# 区切りに | を使うのは、タブだと read が空の欄（rerunOf が無い）を詰めて値がずれるため（| は実行名に使えない）。
+# rerunOf が無ければ空。見つからない・読めない・入力の rerunOf が壊れているときは、理由を出して 1 を返す
+# （判定できないことを「見つからない」「再実行ではない」に丸めない。.claude/rules/error-handling.md）。
+# 引数: ステートマシンの ARN、実行名、エラーで呼ぶ名前（元の実行 / 最初の実行）
+describe_execution_facts() {
+  local arn="$1" name="$2" label="$3" execution_arn described err
+  execution_arn="${arn/:stateMachine:/:execution:}:${name}"
+  err="$(mktemp)"
+  # この関数は $(...) の中で呼ばれ、bash 3.2 ではそこに set -e が引き継がれないため、終了コードを明示的に見る
+  if ! described="$(aws stepfunctions describe-execution --execution-arn "$execution_arn" --output json 2>"$err")"; then
+    if grep -q '(ExecutionDoesNotExist)' "$err"; then
+      echo "エラー: ${label} ${name} が見つかりません。実行名を確かめてください" >&2
+    else
+      cat "$err" >&2
+      echo "エラー: ${label} ${name} を読めません。AWS の認証（aws login）と接続先を確認してください" >&2
+    fi
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
+  # startDate は AWS CLI がオフセット付きの ISO 8601 で出す（LocalStack で観測。2026-11-09・#137）。
+  # input は JSON の文字列のまま入っている
+  printf '%s' "$described" | python3 -c '
+import datetime, json, re, sys
+pattern, name, label = sys.argv[1:]
+execution = json.load(sys.stdin)
+try:
+    rerun_of = json.loads(execution.get("input") or "{}").get("rerunOf", "")
+except (ValueError, AttributeError):
+    rerun_of = None
+if rerun_of != "" and not (isinstance(rerun_of, str) and re.fullmatch(pattern, rerun_of)):
+    print(f"エラー: {label} {name} の入力の rerunOf が実行名の形式ではありません: {rerun_of!r}", file=sys.stderr)
+    sys.exit(1)
+try:
+    started = int(datetime.datetime.fromisoformat(execution["startDate"]).timestamp())
+    status = execution["status"]
+except (KeyError, TypeError, ValueError):
+    print(f"エラー: {label} {name} の状態・開始時刻を読めません", file=sys.stderr)
+    sys.exit(1)
+print("|".join([status, rerun_of, str(started)]))
+' "$EXECUTION_NAME_PATTERN" "$name" "$label"
+}
+
+rerun() {
+  (($# >= 1)) || usage
+  local original="$1"
+  shift
+  # 綴りを誤ったオプションを元の実行名として読まない
+  [[ "$original" != -* ]] || usage
+  parse_start_args "$@"
+  if ! [[ "$original" =~ $EXECUTION_NAME_PATTERN ]]; then
+    echo "エラー: 実行名の形式ではありません: ${original}（80 文字以内、英数字・-・_ のみ）" >&2
+    return 1
+  fi
+
+  local arn facts status rerun_of started root
+  arn="$(state_machine_arn)"
+  facts="$(describe_execution_facts "$arn" "$original" 元の実行)" || return 1
+  IFS='|' read -r status rerun_of started <<<"$facts"
+  if [[ "$status" == "RUNNING" ]]; then
+    echo "エラー: 元の実行 ${original} はまだ実行中です。終わってから再実行してください（重なりは docs/03「失敗の後の再実行」）" >&2
+    return 1
+  fi
+  # 再実行の再実行は、元の実行が引き継いでいた最初の実行の名前を引き継ぐ。7 日も最初の実行の開始から数える
+  root="${rerun_of:-$original}"
+  if [[ "$root" != "$original" ]]; then
+    facts="$(describe_execution_facts "$arn" "$root" 最初の実行)" || return 1
+    IFS='|' read -r status rerun_of started <<<"$facts"
+    if [[ "$status" == "RUNNING" ]]; then
+      echo "エラー: 最初の実行 ${root} はまだ実行中です。終わってから再実行してください" >&2
+      return 1
+    fi
+  fi
+  if (($(date +%s) - started > RERUN_WINDOW_SECONDS)); then
+    echo "エラー: 最初の実行 ${root} の開始から 7 日を過ぎています。送信記録が消えている可能性があり、送れていたメールを送り直しうるため再実行しません（docs/04「保持期間」）" >&2
+    return 1
+  fi
+
+  echo "再実行します: ${original} の論理キー ${root} を引き継ぎます"
+  start_and_wait "$arn" rerun "$root"
+}
+
 logs() {
   [[ $# -eq 1 ]] || usage
   local name="$1" fn
@@ -177,6 +289,7 @@ dlq() {
 
 case "$command" in
   run) run "$@" ;;
+  rerun) rerun "$@" ;;
   logs) logs "$@" ;;
   dlq) dlq "$@" ;;
   *) usage ;;

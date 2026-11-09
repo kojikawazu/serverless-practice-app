@@ -8,6 +8,11 @@
 //   FAKE_AWS_LOG     呼び出しを 1 行 1 JSON で追記するファイル
 //
 // 状態の JSON は `JSON.parse(...) as 型` で読み、検証しない。書くのはテストだけで、形が違えばテストが落ちて分かるため（fake-aws.ts と同じ）。
+//
+// 応答の形は LocalStack で観測したもの（aws-cli 2.37.10、2026-11-09、#137）に合わせる。実 AWS では観測していない:
+// - describe-execution の startDate は、オフセット付きの ISO 8601（`2026-11-09T22:43:36.932996+09:00`）。input は JSON の文字列
+// - 存在しない実行の describe-execution は、終了コード 254 で
+//   `aws: [ERROR]: An error occurred (ExecutionDoesNotExist) when calling the DescribeExecution operation: ...` を出す
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 /** 偽の Step Functions が持つ状態。テストが初期状態を書き、呼び出しの後に読んで確かめる */
@@ -29,6 +34,20 @@ export type FakeSfnState = {
   started: { name: string; input: string } | null;
   /** 操作名（`list-state-machines` など）ごとに、返すエラーコード。認証切れなどを再現する */
   failOn?: Record<string, string>;
+  /**
+   * 既にある実行（`rerun` の元の実行）。実行名ごとに、describe-execution が返す状態・開始時刻・入力を持つ。
+   * ここにも `started` にも無い実行名の describe-execution は、`ExecutionDoesNotExist` で失敗する
+   */
+  executions?: Record<
+    string,
+    {
+      status: string;
+      /** オフセット付きの ISO 8601。`undefined` なら項目ごと返さない */
+      startDate?: string;
+      /** 実行入力（JSON の文字列）。`undefined` なら項目ごと返さない */
+      input?: string;
+    }
+  >;
 };
 
 const statePath = process.env["FAKE_AWS_STATE"];
@@ -68,8 +87,13 @@ const EXECUTION_ARN_PREFIX =
  * @param message - メッセージ
  */
 function fail(code: string, message: string): never {
+  // 操作名は API の名前（describe-execution → DescribeExecution）で出る
+  const apiName = (operation ?? "")
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join("");
   process.stderr.write(
-    `\nAn error occurred (${code}) when calling the ${operation ?? ""} operation: ${message}\n`,
+    `\naws: [ERROR]: An error occurred (${code}) when calling the ${apiName} operation: ${message}\n`,
   );
   process.exit(254);
 }
@@ -105,6 +129,28 @@ switch (`${service ?? ""} ${operation ?? ""}`) {
     break;
   }
   case "stepfunctions describe-execution": {
+    const executionArn = options["execution-arn"] ?? "";
+    const name = executionArn.slice(executionArn.lastIndexOf(":") + 1);
+    const existing = state.executions?.[name];
+    if (existing !== undefined) {
+      replyText(
+        JSON.stringify({
+          executionArn,
+          name,
+          status: existing.status,
+          ...(existing.startDate === undefined
+            ? {}
+            : { startDate: existing.startDate }),
+          ...(existing.input === undefined ? {} : { input: existing.input }),
+        }),
+      );
+    }
+    if (state.started?.name !== name) {
+      fail(
+        "ExecutionDoesNotExist",
+        `Execution Does Not Exist: '${executionArn}'`,
+      );
+    }
     const index = Math.min(state.describeCount, state.statuses.length - 1);
     const status = state.statuses[index] ?? "RUNNING";
     state.describeCount += 1;

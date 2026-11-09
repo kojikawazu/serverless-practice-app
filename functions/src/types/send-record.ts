@@ -11,7 +11,7 @@ export type BeginSendResult =
 
 /**
  * メールの送信記録の口（docs/05「送信記録」）。デモでは DynamoDB が実装する。
- * 記録のキーは `messageKeyOf` で作る `<実行名>:<配信対象 ID>`。
+ * 記録のキーは `messageKeyOf` で作る `<論理キー>:<配信対象 ID>`（docs/05「論理キー（runKey）」）。
  */
 export interface SendRecordStore {
   /**
