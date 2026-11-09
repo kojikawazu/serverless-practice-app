@@ -61,11 +61,16 @@ Lambda を呼び出すと、LocalStack が関数の実行用に別のコンテ�
 
 LocalStack は模倣なので、細かな挙動が本物と違うことがある。違いが出やすいのは、サービス同士が裏側でつながる部分（定時起動・イベント配信・権限の評価など）。
 
-このデモで特に確かめる必要があったのは次の 3 点で、結果（Scheduler は起動しない・状態変化イベントは届く・アラームの状態変化イベントは出ない）と代わりの手段を 09「LocalStack での検証結果」に記録している。
+このデモで確かめた点と結果は、次の場所に記録している。違いは、LocalStack の結果と実 AWS の結果を並べて読む。確かめた点は検証のたびに増えるため、本書には書き写さない。
 
-- EventBridge Scheduler が、決まった時刻に本当にステートマシンを起動するか
-- Step Functions の状態変化イベントが、EventBridge rule に届くか
-- CloudWatch アラームの状態変化イベントが、EventBridge rule に届くか（#101。アラームは評価されるが、イベントは出なかった）
+| 読むもの | 場所 |
+|---|---|
+| LocalStack でどう動いたか・`local` での代わりの手段 | 09「[LocalStack での検証結果](../09-architecture-specification.md#localstack-での検証結果)」 |
+| 同じ点を実 AWS で確かめた結果 | 09「[`dev` での検証結果](../09-architecture-specification.md#dev-での検証結果)」 |
+| 届くイベントの項目の形の違い | 07「[状態変化イベント](../07-api-specification.md#状態変化イベントeventbridge--slack-通知-lambda)」 |
+| LocalStack では動かせない LMI | 09「[LMI（Lambda Managed Instances）](../09-architecture-specification.md#lmilambda-managed-instances)」 |
+
+LocalStack で確かめた点のうち、実 AWS ではまだ観測していないものもある。各点を `dev` で確かめたか（これから確かめるか）は、09「LocalStack での検証結果」の各行に書いてある。
 
 LocalStack で動かなければ手動での起動などで代わりに確かめ、本物どおりの確認は `dev` ステージで行う。**LocalStack で動いたことは、本物で動くことの証明にはならない。** 本物でしか確かめられない点は、最後に `dev` で確認する。
 
