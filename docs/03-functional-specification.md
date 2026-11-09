@@ -198,6 +198,7 @@ Consumer がメールを送った後、メッセージがキューから消え�
 | データ連携の結果が返らない（ハートビート切れ・`TIMED_OUT`） | 上と同じ。どこまで書けていたか分からないため、すべてを書き直す | BigQuery・Cuenote FC への書き込みが二重になりうる。スタブは防がず、`runKey` の同じ出力が 2 回出ることで見分ける（07「スタブへの出力」） |
 | メールの送信の失敗（`failAt: consumer`。実行は `SUCCEEDED`） | 送れなかった分だけを送る。データ連携は書き直す（上と同じく二重になりうる） | 元の実行のメッセージは DLQ に残る。再実行が終わり、送れたことを確かめてから DLQ を空にする（下記「操作方針」） |
 | 送ったかどうか判定できない（「送信中」の記録が残った） | 判定できないまま、また `SendStateUnknownError` で DLQ へ移る | 送ったかを確かめ、記録を直してから再実行する（下記「送信中のまま残った記録」） |
+| 手動停止（`ABORTED`） | 止める前に積んだメールは送られているため送らず、残りを送る。データ連携は書き直す | 元の実行のデータ連携 Lambda は、停止の後も動き続ける。終わるのを待ってから再実行する（下記「手動停止」） |
 | 起動されなかった（Scheduler の起動の失敗・起動を試みなかった日） | 元の実行が無いため、`rerun` は使えない | `run` で起動する |
 
 - **`SUCCEEDED` の実行も再実行できる。** メールの送信の失敗は、実行が `SUCCEEDED` のまま起きるため（上の「メールの送信の失敗」）
@@ -233,6 +234,30 @@ Consumer がメールを送った後、メッセージがキューから消え�
    - 送っていた: `aws dynamodb update-item --update-expression "SET #s = :sent" --condition-expression "#s = :sending"`（`:sent` は `SENT`、`:sending` は `SENDING`、`#s` は `status`）
    - 送っていなかった: `aws dynamodb delete-item --condition-expression "#s = :sending"`
 3. `rerun` で再実行する。送っていた分は送らず、送っていなかった分を送る
+
+### 手動停止・二重起動・実行の重なり
+
+一般的なバッチで起きる 3 つの状況の流れ（#138）。どれも止める仕組みは持たず、何が二重になるかを決めて人の手順で避ける。扱いと理由の正本は 04「[手動停止と実行の重なり](04-non-functional-specification.md#手動停止と実行の重なり)」。
+
+#### 手動停止
+
+`stop-execution` で止めると、実行は `ABORTED` になり、状態変化イベントで通知される（02「F-5」）。**止まるのは実行だけで、始めた処理は止まらない。** 止める前に積んだメッセージは Consumer が送り、非同期で呼んだデータ連携 Lambda は動き続けて、結果を返すときに失敗する。LocalStack で観測した流れで、実 AWS（LMI）では未観測（#167）。
+
+![手動停止のシーケンス図。開発者が holdSeconds 30 で実行を始め、投入 Lambda はメッセージを SQS FIFO へ積み終える。Step Functions はデータ連携 Lambda を非同期で呼び、関数は S3・BigQuery・Cuenote FC へ書いてから待ちに入る。開発者が StopExecution で止めると、実行は ABORTED になり、error と cause は null で、状態変化イベントが Slack 通知に届く。DataSync のタスクを閉じるイベントは無い。積み終えたメッセージは Consumer がそのまま送る。データ連携 Lambda は止まらず、待ちを終えてから SendTaskSuccess を呼び、InvalidToken で失敗する。LocalStack で観測し、実 AWS は未観測](images/sequences/abort.drawio.svg)
+
+止めた実行を再実行するときは、元の実行のデータ連携 Lambda が終わったことを確かめてから `rerun` する。終わったことは、`scripts/batch.sh <stage> logs <元の実行名>` の `data-sync` に「データ連携に失敗しました」（`InvalidToken`）の行が出たことで分かる（LocalStack で観測した行。実 AWS のエラー名は未観測で #167）。待たずに再実行すると、2 つのデータ連携が重なる（下の「実行の重なり」）。`rerun` で断るようにする変更は #166。
+
+#### 二重起動
+
+同じ定時の起動から実行が 2 つ始まりうる流れ。Scheduler が呼び出しをやり直すときに実行名が変わるかは観測しておらず、図は推論（04「リトライ」・#92）。防がないと決めている。
+
+![二重起動のシーケンス図。Scheduler が実行名 A で StartExecution を呼び、実行 A は始まるが、Scheduler には失敗に見える。Scheduler は呼び出しをやり直し、実行名 B で StartExecution を呼ぶ。同じ名前なら Standard の冪等性で 2 つ目は始まらないが、名前が違えば実行 B が始まる。実行 A と B の投入 Lambda はそれぞれ実行名から重複排除 ID と論理キーを作るため、SQS FIFO も送信記録も重複を除かず、Consumer はメールを 2 通ずつ送る。同じ日に UUID の実行が 2 つ並ぶことで分かる。推論で、観測していない](images/sequences/double-start.drawio.svg)
+
+#### 実行の重なり
+
+定時の実行どうしは重ならない（ステートマシンのタイムアウトが起動の間隔より短い）。重なるのは、手動で起動した実行が他の実行と時間が重なるとき。論理キーが違えば別の実行として扱い、互いに防がない。注意が要るのは、止めた直後に `rerun` して、同じ論理キーのデータ連携が 2 つ動く場合。
+
+![実行の重なりのシーケンス図。開発者が実行 X をデータ連携の途中で止め、すぐに batch.sh rerun X で再実行する。X は ABORTED で RUNNING ではないため、rerun は断らない。再実行のデータ連携 Lambda は、S3 の exports/日付/X.json と BigQuery・Cuenote FC へ書いて SendTaskSuccess を返し、再実行は SUCCEEDED になる。元の実行のデータ連携 Lambda は動き続けていて、同じキーへ後から書くと S3 は後から書いた内容が残り、BigQuery・Cuenote FC へは二重に書かれる。SendTaskSuccess は失敗する。メールは送信記録と FIFO のグループで二重にならない。推論で、重なりそのものは観測していない](images/sequences/overlap.drawio.svg)
 
 ## 操作方針
 

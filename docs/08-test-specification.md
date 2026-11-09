@@ -124,6 +124,7 @@
 | 90 | `scripts/batch.sh` の `rerun`: `describe-execution` が失敗したら（認証切れ・接続先の誤り）、「見つからない」と区別したメッセージを出し、`start-execution` を呼ばずに 1 で終える（#137） | UT | 異常系 |
 | 91 | `failAt: "dataSync"` で失敗した実行を `rerun` すると、再実行が `SUCCEEDED` になる。メール送信スタブのログは配信対象ごとに元の実行の 1 回だけで、再実行では配信対象ごとに「送信済みのため送りません」が出る。S3 の同じキーのファイルが再実行の `executionName` で上書きされ、BigQuery / Cuenote FC スタブのログが `runKey` 付きで出る（#137） | IT | 準正常系 |
 | 92 | `failAt: "consumer"` の実行のメッセージが DLQ へ移った後に `rerun` すると、メール送信スタブのログが配信対象ごとに 1 回出る。再実行の投入が、元の実行の投入から 5 分以内であることも確かめる（5 分を超えたら、重複排除 ID を引き継がない理由を確かめられていないため失敗にする。05「メールメッセージ」。#137） | IT | 準正常系 |
+| 93 | `dev` で、`holdSeconds` 付きの実行をデータ連携の待ちの途中で止め、実行の結果（`error` / `cause`）・実行履歴の最後のイベント・状態変化イベントの中身と、停止の後もデータ連携 Lambda（LMI）が待ちを終えるまで動くか、`SendTaskSuccess` / `SendTaskFailure` のエラー名、停止の前に積んだメッセージが送られるかを記録する（04「手動停止と実行の重なり」。LocalStack では 09「LocalStack での検証結果」で観測済み。実施は #167） | 手動 | 準正常系 |
 
 次のケースは、確かめている流れを 03「処理の流れ」の図で追える。
 
@@ -134,6 +135,7 @@
 | #11・#24（Consumer の不正な本文・同じグループの後続） | 03「[本文が不正なメッセージ（Consumer）](03-functional-specification.md#本文が不正なメッセージconsumer)」 |
 | #76・#77・#80（送信記録による二重送信の防止） | 03「[送った直後に落ちたメッセージの再配信](03-functional-specification.md#送った直後に落ちたメッセージの再配信failat-consumeraftersend)」 |
 | #85・#91（再実行で送れていたメールを送らない） | 03「[失敗の後の再実行](03-functional-specification.md#失敗の後の再実行)」 |
+| #27・#93（手動停止） | 03「[手動停止](03-functional-specification.md#手動停止)」 |
 
 IT（`test/it/batch.test.ts`）は 02 の受け入れ条件のうち `local` で確かめられるものを扱う。
 
