@@ -33,21 +33,23 @@ erDiagram
         string email
         string name
     }
-    MAIL_MESSAGE ||--o| SEND_RECORD : "送る前後に書く"
+    MAIL_MESSAGE }o--o| SEND_RECORD : "送る前後に書く（再実行で共有）"
     MAIL_MESSAGE {
         string deduplicationId PK "executionName:recipientId"
         string recipientId FK
         string executionName
+        string runKey "rerunOf があればその値、無ければ executionName"
         string simulateFailure
     }
     SEND_RECORD {
-        string messageKey PK "executionName:recipientId"
+        string messageKey PK "runKey:recipientId"
         string status "SENDING / SENT"
         number expiresAt "TTL（エポック秒）"
     }
     EXPORT_FILE {
-        string key PK "exports/YYYY-MM-DD/executionName.json"
+        string key PK "exports/YYYY-MM-DD/runKey.json"
         string executionName
+        string runKey
         datetime exportedAt
     }
 ```
@@ -80,6 +82,7 @@ SQS FIFO のメッセージ本文（JSON）と、送信時の属性。
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `executionName` | string | 投入したステートマシンの実行名 |
+| `runKey` | string | 論理キー（下記「論理キー（runKey）」）。再実行では元の実行名、それ以外では `executionName` と同じ値 |
 | `recipientId` | string | 配信対象の ID |
 | `email` | string | 宛先メールアドレス |
 | `subject` | string | 件名。デモでは固定文言 |
@@ -90,9 +93,10 @@ SQS FIFO のメッセージ本文（JSON）と、送信時の属性。
 | SQS の属性 | 値 | 理由 |
 |---|---|---|
 | `MessageGroupId` | `recipientId` | 順序が要るのは同じ宛先の中だけ。宛先ごとにグループを分け、別宛先は並行に処理できるようにする |
-| `MessageDeduplicationId` | `<executionName>:<recipientId>` | 同じ実行の再投入（Step Functions の Retry）を 5 分以内なら重複排除する。UUID を毎回作ると効かない（元資料のリスク 2） |
+| `MessageDeduplicationId` | `<executionName>:<recipientId>` | 同じ実行の再投入（Step Functions の Retry）を 5 分以内なら重複排除する。UUID を毎回作ると効かない（元資料のリスク 2）。`runKey` ではなく実行名から作る（下記） |
 
 - 5 分を超えた再投入と、Consumer 側の二重処理（送った直後に落ちて再配信される）は、重複排除では防げない。どちらも、同じキーの送信記録（下記「送信記録」）で Consumer が送り直さない（#136）
+- **重複排除 ID は、再実行で引き継がない**（#137）。引き継ぐと、元の実行から 5 分以内に再実行したとき、再実行のメッセージが重複として捨てられる。`failAt: "consumer"` のメッセージは約 3 分で DLQ へ移り、通知を受けてすぐ再実行すると 5 分に収まりうる。重複として捨てられたメッセージも、送信は成功として返る（公式「Amazon SQS FIFO queue message deduplication ID」の記述。このデモでは観測していない）ため、送れなかったメールが送られないまま誰も気づけない。実行をまたいだ重複は、重複排除ではなく送信記録（`runKey` から作る）で防ぐ
 - グループは実行をまたいで共有される。失敗し続けるメッセージ（`failAt: "consumer"`）がグループの先頭にあると、DLQ へ移るまで（約 3 分）同じ宛先の別の実行のメッセージも止まる。Consumer は同じグループの後続を失敗として返す（03「Consumer Lambda」）ため、仕組み上は後続の受信回数も増え、DLQ へ移りうる。IT はこのため `consumer` のケースを最後に順番に実行する（08「テストケース」）
 
 ### 連携ファイル（ExportFile）
@@ -104,12 +108,13 @@ SQS FIFO のメッセージ本文（JSON）と、送信時の属性。
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `executionName` | string | 書き出した実行の実行名 |
+| `runKey` | string | 論理キー（下記「論理キー（runKey）」）。再実行で書いたファイルかどうかを、`executionName` と見比べて分けられる |
 | `exportedAt` | string | 書き出した時刻（ISO 8601、UTC） |
 | `recipients` | Recipient[] | 配信対象の全件 |
 
 #### インデックス・制約
 
-- オブジェクトキーは `exports/<YYYY-MM-DD>/<executionName>.json`（日付は UTC）。同じ実行を再実行すると同じキーに上書きされる
+- オブジェクトキーは `exports/<YYYY-MM-DD>/<runKey>.json`（日付は書き出した時刻の UTC）。同じ日の再実行は、失敗した実行が残したファイルを同じキーで上書きする。日をまたいだ再実行は別の日付のキーに書き、元のファイルはライフサイクル削除（7 日）まで残る（#137）
 - `Content-Type` は `application/json`
 - 7 日でライフサイクル削除する（04「保持期間」）
 
@@ -121,7 +126,7 @@ DynamoDB のテーブル `serverless-practice-app-<stage>-send-records`（Terraf
 
 | フィールド | 型 | 説明 |
 |-----------|----|------|
-| `messageKey` | string（パーティションキー） | `<executionName>:<recipientId>`。メールメッセージの `MessageDeduplicationId` と同じ値で、同じ関数（`messageKeyOf`）で作る |
+| `messageKey` | string（パーティションキー） | `<runKey>:<recipientId>`。再実行は元の実行と同じキーを使い、元の実行で送れていたメールを送り直さない（#137）。`rerunOf` の無い実行ではメールメッセージの `MessageDeduplicationId` と同じ値になるが、再実行では違う値になる（上記「メールメッセージ」） |
 | `status` | string | `SENDING`（送信中。送る前に書く）/ `SENT`（送信済み。送った後に書く） |
 | `expiresAt` | number | 期限（エポック秒）。書いた時刻の 7 日後。DynamoDB の TTL の属性 |
 
@@ -133,6 +138,23 @@ DynamoDB のテーブル `serverless-practice-app-<stage>-send-records`（Terraf
 - 期限を過ぎた記録は、DynamoDB の TTL が非同期に消す。期限ちょうどに消えることを前提にしない。期限の 7 日は、メッセージが再び届きうる期間（キュー 1 日・DLQ 4 日。04「保持期間」）より長く取った
 - 本文・宛先メールアドレスは持たない（キーの配信対象 ID だけ。06「データ保護」）
 - テーブルは課金モードをオンデマンド（`PAY_PER_REQUEST`）にし、置いておくだけの料金をかけない（09「費用」）
+
+### 論理キー（runKey）
+
+「どの実行の続きか」を表す値で、失敗の後の再実行（03「[失敗の後の再実行](03-functional-specification.md#失敗の後の再実行)」・#137）が、元の実行の送信記録と連携ファイルを引き継ぐために使う。保存する項目ではなく、投入 Lambda とデータ連携 Lambda がタスク入力から作る。
+
+| タスク入力 | `runKey` |
+|---|---|
+| `rerunOf` がある（再実行） | `rerunOf` の値（元の実行名。再実行の再実行でも、最初の実行の名前） |
+| `rerunOf` が無い（定時起動・`run` での起動） | `executionName` の値。#137 より前と同じキーになる |
+
+| 使う場所 | 作り方 | 再実行で引き継ぐか |
+|---|---|---|
+| 送信記録のキー | `<runKey>:<recipientId>` | 引き継ぐ。元の実行で送れていたメールを送らない |
+| 連携ファイルのキー | `exports/<YYYY-MM-DD>/<runKey>.json` | 引き継ぐ。同じ日なら上書きする |
+| SQS の重複排除 ID | `<executionName>:<recipientId>` | **引き継がない**（上記「メールメッセージ」） |
+
+実行名を使い回して同じキーにする手はとれない。Step Functions の Standard ワークフローは、終わった実行と同じ名前の実行を 90 日間は始められない（公式「StartExecution」の記述。観測していない）。
 
 ### SSM パラメータ
 

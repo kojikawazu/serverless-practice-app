@@ -17,7 +17,9 @@
 | LocalStack | AWS のサービスを手元の Docker コンテナで模倣するツール。`local` ステージの実行環境（[LocalStack 解説](guides/localstack.md)） |
 | スタブ | 外部サービス（SendGrid・Slack・MySQL・BigQuery・Cuenote FC）の代わり。送信の代わりに構造化ログを出す（09「外部サービスのスタブ」） |
 | 失敗の注入 | 実行入力の `failAt` で指定した箇所を意図的に失敗させること（02「F-6」） |
-| 実行名 | Step Functions の実行ごとの名前（`$$.Execution.Name`）。ログ・S3 のキー・重複排除 ID で 1 回の実行を識別する |
+| 実行名 | Step Functions の実行ごとの名前（`$$.Execution.Name`）。ログ・重複排除 ID で 1 回の実行を識別する |
+| 再実行 | 失敗した実行を、論理キーを引き継いで新しい実行名で起動し直すこと（`scripts/batch.sh <stage> rerun`。02「F-8」）。Step Functions のタスクの `Retry`（同じ実行の中のやり直し）とは別 |
+| 論理キー（`runKey`） | 再実行の前後で同じになる値。実行入力の `rerunOf`（最初の実行の名前）、無ければ実行名。送信記録・S3 のキーに使う（05「論理キー（runKey）」） |
 | 配信対象 | メールの宛先。MySQL スタブが返す固定の 3 件 |
 | 連携ファイル | データ連携 Lambda が S3 に書く JSON |
 | 部分バッチ応答 | Consumer が失敗したメッセージだけを `batchItemFailures` で返し、その分だけを再配信させる仕組み |

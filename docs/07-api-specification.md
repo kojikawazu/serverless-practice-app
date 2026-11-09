@@ -42,6 +42,15 @@
 - `failAt` / `holdSeconds` は省略できる。Scheduler からの定時起動では `{}` を渡す
 - 値と結果の対応は 02「F-6」。`holdSeconds` は検証用の待ち時間（秒、0〜1,200 の整数）で、データ連携 Lambda だけが使う
 
+失敗の後の再実行（02「F-8」・#137）では、元の実行名を `rerunOf` に入れる。`scripts/batch.sh <stage> rerun` が組み立て、定時起動では使わない。
+
+```json
+{ "rerunOf": "manual-20261008-001" }
+```
+
+- `rerunOf` は、再実行の再実行でも最初の実行の名前にする（スクリプトが元の実行の入力から引き継ぐ）。投入・データ連携 Lambda は、この値を論理キー（05「論理キー（runKey）」）にする
+- 元の実行の `failAt` / `holdSeconds` は引き継がない。回復のための実行のため。失敗を注入した再実行を試したいときは、`rerun` に `failAt` を付ける
+
 ### タスク入力（投入・データ連携 Lambda 共通）
 
 ステートマシンが実行名と実行入力から組み立てる。
@@ -69,6 +78,7 @@
 ```
 
 - 実行入力に `failAt` が無ければ、タスク入力にも無いまま渡る。JSONPath の `"failAt.$": "$.failAt"` のように、項目が無いだけで `States.Runtime` で落ちることがない
+- `rerunOf` も同じく、実行入力にあればそのままタスク入力に入る。ステートマシンの定義は変えない（#137）
 - 実行入力に未知のキー（`failat` などの綴り違い）があれば、そのままタスク入力に入り、タスク入力のスキーマ（未知のキーを拒否）で `ValidationError` になる
 
 ### 投入 Lambda の出力
@@ -83,6 +93,8 @@
 { "exported": 3, "s3Key": "exports/2026-10-08/manual-20261008-001.json" }
 ```
 
+キーの最後は論理キー（05「論理キー（runKey）」）。再実行（`rerunOf: "manual-20261008-001"`）でも、同じ日なら同じキーになる。
+
 戻り値ではなく、`SendTaskSuccess` の `output` として返す（非同期で呼ばれるため、戻り値はステートマシンに届かない）。
 
 ステートマシンはタスクの出力を次のステートの入力に流さない（各タスクの `Output` を `{% $states.input %}` にして実行入力を保つ）。`DataSync` が実行入力の `failAt` を読めるようにするため。
@@ -92,6 +104,7 @@
 ```json
 {
   "executionName": "manual-20261008-001",
+  "runKey": "manual-20261008-001",
   "recipientId": "r-001",
   "email": "user1@example.com",
   "subject": "serverless-practice-app デモ配信",
@@ -99,7 +112,7 @@
 }
 ```
 
-属性（`MessageGroupId` / `MessageDeduplicationId`）と `simulateFailure` の値（`none` / `beforeSend` / `afterSend`）は 05「メールメッセージ」を参照。
+属性（`MessageGroupId` / `MessageDeduplicationId`）と `simulateFailure` の値（`none` / `beforeSend` / `afterSend`）は 05「メールメッセージ」を参照。`runKey` は必須で、Consumer は送信記録のキーをこの値から作る（05「論理キー（runKey）」）。`runKey` の無い本文は不正な本文として扱う（#137 より前に積まれたメッセージは、デプロイの前にキューを空にしておく）。
 
 ### Consumer Lambda の出力（部分バッチ応答）
 
@@ -222,8 +235,10 @@ Scheduler が、起動に失敗した呼び出しを送る。このデモのコ�
 |---|---|
 | `sendgrid` | 宛先・件名・`recipientId` |
 | `slack` | 実行の失敗: 実行名・状態・エラー名・原因・実行 ARN。アラーム（#101・#109・#135）: アラーム名・`ALARM` になった理由（`message` で見分ける。どのアラームかはアラーム名で見分ける） |
-| `bigquery` | 書き込み件数・`executionName` |
-| `cuenote-fc` | 登録件数・`executionName` |
+| `bigquery` | 書き込み件数・`executionName`・`runKey` |
+| `cuenote-fc` | 登録件数・`executionName`・`runKey` |
+
+`bigquery` / `cuenote-fc` に `runKey` を出すのは、再実行で同じ論理キーの書き込みが 2 回起きたことを、ログから見分けるため（03「失敗の後の再実行」。#137）。スタブはログを出すだけで、二重の書き込みを防がない。
 
 ## 認証・エラーハンドリング
 
