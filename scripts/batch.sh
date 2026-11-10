@@ -10,7 +10,8 @@
 #   scripts/batch.sh <stage> rerun <元の実行名> [failAt] [--hold-seconds <秒>]
 #                                            失敗した実行を、論理キーを引き継いで再実行する（docs/03「失敗の後の再実行」）。
 #                                            実行入力の rerunOf に最初の実行の名前を入れる。元の failAt / holdSeconds は引き継がない
-#                                            元の実行が見つからない・実行中・最初の実行の開始から 7 日を過ぎているときは起動せずに 1 で終える
+#                                            元の実行が見つからない・実行中・最初の実行の開始から 7 日を過ぎているとき、
+#                                            同じ論理キーの実行が実行中か、そのデータ連携 Lambda が動きうるときは起動せずに 1 で終える
 #   scripts/batch.sh <stage> logs <実行名>   4 つの Lambda のログから、その実行名を含む行だけを出す
 #                                            最初の実行の名前を渡すと、再実行の行も出る（ログに runKey があるため）
 #   scripts/batch.sh <stage> dlq             DLQ のメッセージ数を出す
@@ -220,6 +221,118 @@ print("|".join([status, rerun_of, str(started)]))
 ' "$EXECUTION_NAME_PATTERN" "$name" "$label"
 }
 
+# 同じ論理キーの実行（最初の実行と、rerunOf にその名前を持つ再実行）の名前と状態を「名前|状態」で 1 行ずつ出す。
+# list-executions は入力を返さないため、最初の実行より後に始まった実行を 1 件ずつ describe-execution で読む。
+# 一覧を取れない・読めない実行があるときは、理由を出して 1 を返す（判定できないことを「同じ論理キーの実行は無い」に丸めない）。
+# 引数: ステートマシンの ARN、最初の実行の名前、最初の実行の開始時刻（エポック秒）
+run_key_executions() {
+  local arn="$1" root="$2" root_started="$3" listed candidates name status facts rerun_of
+  # この関数は $(...) の中で呼ばれ、bash 3.2 ではそこに set -e が引き継がれないため、終了コードを明示的に見る
+  if ! listed="$(aws stepfunctions list-executions --state-machine-arn "$arn" --output json)"; then
+    echo "エラー: 実行の一覧を取得できません。AWS の認証（aws login）と接続先を確認してください" >&2
+    return 1
+  fi
+  # 各要素は name / status / startDate（オフセット付きの ISO 8601）を持ち、入力は持たない（LocalStack で観測。2026-11-10・#166）
+  if ! candidates="$(printf '%s' "$listed" | python3 -c '
+import datetime, json, sys
+root_started = int(sys.argv[1])
+for execution in json.load(sys.stdin)["executions"]:
+    started = int(datetime.datetime.fromisoformat(execution["startDate"]).timestamp())
+    if started >= root_started:
+        print(execution["name"] + "|" + execution["status"])
+' "$root_started")"; then
+    echo "エラー: 実行の一覧を読めません" >&2
+    return 1
+  fi
+  while IFS='|' read -r name status; do
+    [[ -n "$name" ]] || continue
+    if [[ "$name" != "$root" ]]; then
+      facts="$(describe_execution_facts "$arn" "$name" 実行)" || return 1
+      IFS='|' read -r _ rerun_of _ <<<"$facts"
+      [[ "$rerun_of" == "$root" ]] || continue
+    fi
+    printf '%s|%s\n' "$name" "$status"
+  done <<<"$candidates"
+}
+
+# 実行のデータ連携 Lambda が、実行が終わった後も動きうる期限を「エポック秒|表示用の時刻」で出す。動きえなければ何も出さない。
+# DataSync（.waitForTaskToken で呼ぶ唯一のタスク）の最後の呼び出しが、結果（TaskSucceeded / TaskFailed）で閉じていなければ、
+# 関数は動き続けうる（手動停止・タイムアウト。docs/04「手動停止と実行の重なり」）。期限は呼び出しの時刻 + その実行で効いていた
+# タスクのタイムアウト（TaskScheduled の timeoutInSeconds）。関数はキューで待てる時間と関数のタイムアウトの合計がこれに収まるよう
+# 設定している（infra/cdk の DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS）。最後の呼び出しだけを見るのは、Retry するのが結果の返った
+# 失敗（TaskFailed）だけで、それより前の呼び出しは閉じているため。
+# 履歴を読めない・期限を出せないときは、理由を出して 1 を返す。
+# 引数: ステートマシンの ARN、実行名
+data_sync_busy_until() {
+  local arn="$1" name="$2" execution_arn history
+  execution_arn="${arn/:stateMachine:/:execution:}:${name}"
+  # この関数は $(...) の中で呼ばれ、bash 3.2 ではそこに set -e が引き継がれないため、終了コードを明示的に見る
+  if ! history="$(aws stepfunctions get-execution-history --execution-arn "$execution_arn" --output json)"; then
+    echo "エラー: 実行 ${name} の履歴を読めません。AWS の認証（aws login）と接続先を確認してください" >&2
+    return 1
+  fi
+  # DataSync の TaskScheduled は resource が invoke.waitForTaskToken で、timeoutInSeconds を持つ。timestamp はオフセット付きの
+  # ISO 8601。手動停止した実行は ExecutionAborted で終わり、タスクを閉じるイベントが無い（LocalStack で観測。2026-11-10・#166）
+  printf '%s' "$history" | python3 -c '
+import datetime, json, sys
+name = sys.argv[1]
+callback = "invoke.waitForTaskToken"
+events = json.load(sys.stdin)["events"]
+scheduled = None
+closed = False
+for event in events:
+    kind = event.get("type")
+    if kind == "TaskScheduled" and event.get("taskScheduledEventDetails", {}).get("resource") == callback:
+        scheduled = event
+        closed = False
+    elif kind in ("TaskSucceeded", "TaskFailed"):
+        details = event.get("taskSucceededEventDetails") or event.get("taskFailedEventDetails") or {}
+        if details.get("resource") == callback:
+            closed = True
+if scheduled is None or closed:
+    sys.exit(0)
+try:
+    called = datetime.datetime.fromisoformat(scheduled["timestamp"])
+    timeout = scheduled["taskScheduledEventDetails"]["timeoutInSeconds"]
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        raise TypeError(timeout)
+except (KeyError, TypeError, ValueError):
+    print(f"エラー: 実行 {name} のデータ連携の呼び出しの時刻・タイムアウトを読めません", file=sys.stderr)
+    sys.exit(1)
+until = called + datetime.timedelta(seconds=timeout)
+print(str(int(until.timestamp())) + "|" + until.astimezone().isoformat(timespec="seconds"))
+' "$name"
+}
+
+# 同じ論理キーの実行が実行中か、そのデータ連携 Lambda が動きうるなら、理由を出して 1 を返す（docs/03「`rerun` が断る条件」）。
+# 再実行のデータ連携と重なると、S3 は後から書いた側の内容が残り、BigQuery・Cuenote FC へは二重に書かれるため。
+# 引数: ステートマシンの ARN、最初の実行の名前、最初の実行の開始時刻（エポック秒）
+refuse_if_run_key_busy() {
+  local arn="$1" root="$2" root_started="$3" members name status busy until until_text found_root=0
+  members="$(run_key_executions "$arn" "$root" "$root_started")" || return 1
+  while IFS='|' read -r name status; do
+    [[ -n "$name" ]] || continue
+    [[ "$name" != "$root" ]] || found_root=1
+    if [[ "$status" == "RUNNING" ]]; then
+      echo "エラー: 同じ論理キー ${root} の実行 ${name} はまだ実行中です。終わってから再実行してください" >&2
+      return 1
+    fi
+    busy="$(data_sync_busy_until "$arn" "$name")" || return 1
+    [[ -n "$busy" ]] || continue
+    IFS='|' read -r until until_text <<<"$busy"
+    if (($(date +%s) < until)); then
+      echo "エラー: 同じ論理キー ${root} の実行 ${name} は、データ連携が結果を返さずに終わりました。データ連携 Lambda が ${until_text} まで動きうるため、それまで再実行しません（docs/03「手動停止」）" >&2
+      return 1
+    fi
+  done <<<"$members"
+  # 最初の実行は describe-execution で読めているため、一覧に必ず含まれる。含まれなければ一覧が欠けており、
+  # 同じ論理キーの実行を見落としうる（検査した 0 件と、検査できなかった 0 件を区別する）
+  if ((found_root == 0)); then
+    echo "エラー: 実行の一覧に最初の実行 ${root} がありません。同じ論理キーの実行を確かめられないため再実行しません" >&2
+    return 1
+  fi
+}
+
 rerun() {
   (($# >= 1)) || usage
   local original="$1"
@@ -254,6 +367,7 @@ rerun() {
     echo "エラー: 最初の実行 ${root} の開始から 7 日を過ぎています。送信記録が消えている可能性があり、送れていたメールを送り直しうるため再実行しません（docs/04「保持期間」）" >&2
     return 1
   fi
+  refuse_if_run_key_busy "$arn" "$root" "$started" || return 1
 
   echo "再実行します: ${original} の論理キー ${root} を引き継ぎます"
   start_and_wait "$arn" rerun "$root"

@@ -11,7 +11,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FakeSfnState } from "./helpers/fake-aws-sfn";
 
-// scripts/batch.sh の run（実行を起動して結果を待つ）と rerun（論理キーを引き継いで再実行する）を、偽の AWS CLI で確かめる（docs/08 #47〜#49・#88〜#90）。
+// scripts/batch.sh の run（実行を起動して結果を待つ）と rerun（論理キーを引き継いで再実行する）を、偽の AWS CLI で確かめる（docs/08 #47〜#49・#88〜#90・#94〜#96）。
 // 実行の結果（終わらない・失敗する）を思いどおりに作るため、外部 I/O の AWS CLI だけを PATH の先頭の偽物に差し替える（testing.md）。
 //
 // 実 AWS に触れないための備え（budget-alert.test.ts と同じ）:
@@ -528,6 +528,348 @@ describe("batch.sh rerun（#137）", () => {
       );
       expect(result.stderr).not.toContain("見つかりません");
       expect(result.state.started).toBeNull();
+    });
+  });
+});
+
+/** DataSync タスクの閉じ方。`null` は閉じるイベントが無い（手動停止・実行のタイムアウト） */
+type DataSyncClose = "TaskSucceeded" | "TaskFailed" | "TaskTimedOut" | null;
+
+/**
+ * 実行履歴のイベントを、LocalStack で観測した形（2026-11-10、#166）で作る。
+ *
+ * @param type - イベントの種類
+ * @param resource - タスクの resource（`invoke` は投入、`invoke.waitForTaskToken` は DataSync）
+ * @param timestamp - イベントの時刻（オフセット付きの ISO 8601）
+ * @param extra - 詳細に足す項目（`timeoutInSeconds` など）
+ * @returns イベント
+ */
+function taskEvent(
+  type: string,
+  resource: string,
+  timestamp: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const detailsKey = `${type.charAt(0).toLowerCase()}${type.slice(1)}EventDetails`;
+  return {
+    timestamp,
+    type,
+    [detailsKey]: { resourceType: "lambda", resource, ...extra },
+  };
+}
+
+/**
+ * DataSync を呼んだ実行の履歴を作る。投入は成功し、DataSync を `attempts` 回呼んで、最後の呼び出しを `close` で閉じる。
+ * 最後より前の呼び出しは、Retry の対象の `TaskFailed`（`Lambda.ServiceException`）で閉じる。
+ *
+ * @param calledMinutesAgo - DataSync を（最後に）呼んだのが何分前か
+ * @param close - 最後の呼び出しの閉じ方
+ * @param attempts - DataSync を呼んだ回数（既定 1）
+ * @returns 実行履歴のイベント（id は付けない。batch.sh は読まない）
+ */
+function dataSyncHistory(
+  calledMinutesAgo: number,
+  close: DataSyncClose,
+  attempts = 1,
+): Record<string, unknown>[] {
+  const called = hoursAgo(calledMinutesAgo / 60);
+  const scheduled = taskEvent("TaskScheduled", CALLBACK, called, {
+    timeoutInSeconds: 960,
+    heartbeatInSeconds: 300,
+  });
+  const events = [
+    { timestamp: called, type: "ExecutionStarted" },
+    taskEvent("TaskScheduled", "invoke", called),
+    taskEvent("TaskSucceeded", "invoke", called),
+  ];
+  for (let i = 1; i < attempts; i += 1) {
+    events.push(
+      scheduled,
+      taskEvent("TaskFailed", CALLBACK, called, {
+        error: "Lambda.ServiceException",
+      }),
+    );
+  }
+  events.push(scheduled, taskEvent("TaskSubmitted", CALLBACK, called));
+  if (close !== null) {
+    events.push(taskEvent(close, CALLBACK, called));
+  }
+  return events;
+}
+
+/** DataSync の resource（`.waitForTaskToken` で呼ぶ唯一のタスク） */
+const CALLBACK = "invoke.waitForTaskToken";
+
+/**
+ * 再実行を断ったこと（起動していないこと）を確かめる。
+ *
+ * @param result - 実行結果
+ * @param message - 標準エラーに含まれるべき理由
+ */
+function expectRefused(result: RunResult, message: string): void {
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain(message);
+  expect(result.state.started).toBeNull();
+  expect(result.calls.filter((args) => args[1] === "start-execution")).toEqual(
+    [],
+  );
+}
+
+describe("batch.sh rerun: データ連携が動きうる同じ論理キーの実行（#166）", () => {
+  describe("正常系", () => {
+    it.each([
+      {
+        label: "DataSync が結果を返した（TaskSucceeded）",
+        close: "TaskSucceeded",
+      },
+      { label: "DataSync が失敗を返した（TaskFailed）", close: "TaskFailed" },
+    ] as const)("$label 実行は、終わった直後でも再実行する", ({ close }) => {
+      const result = batch(
+        withExecutions({
+          "manual-1": {
+            status: close === "TaskSucceeded" ? "SUCCEEDED" : "FAILED",
+            startDate: hoursAgo(0.1),
+            history: dataSyncHistory(1, close),
+          },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(startedInput(result)).toEqual({ rerunOf: "manual-1" });
+    });
+
+    it("DataSync を呼ばずに終わった（投入で失敗した）実行は、終わった直後でも再実行する", () => {
+      const now = hoursAgo(0);
+      const result = batch(
+        withExecutions({
+          "manual-1": {
+            status: "FAILED",
+            startDate: now,
+            history: [
+              { timestamp: now, type: "ExecutionStarted" },
+              taskEvent("TaskScheduled", "invoke", now),
+              taskEvent("TaskFailed", "invoke", now),
+            ],
+          },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.state.started).not.toBeNull();
+    });
+
+    it("止めた実行でも、DataSync を呼んでからタスクのタイムアウト（960 秒）を過ぎていれば（17 分前）再実行する", () => {
+      const result = batch(
+        withExecutions({
+          "manual-1": {
+            status: "ABORTED",
+            startDate: hoursAgo(0.5),
+            history: dataSyncHistory(17, null),
+          },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.state.started).not.toBeNull();
+    });
+
+    it("Retry した DataSync は最後の呼び出しだけを見る（前の呼び出しは TaskFailed で閉じている）", () => {
+      const result = batch(
+        withExecutions({
+          "manual-1": {
+            status: "SUCCEEDED",
+            startDate: hoursAgo(0.1),
+            history: dataSyncHistory(1, "TaskSucceeded", 2),
+          },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.state.started).not.toBeNull();
+    });
+
+    it("論理キーの違う実行は、止めた直後でも実行中でも見ない（互いに防がない。docs/04「手動停止と実行の重なり」）", () => {
+      const result = batch(
+        withExecutions({
+          ...FAILED_MANUAL_1,
+          "manual-2": {
+            status: "ABORTED",
+            startDate: hoursAgo(0.1),
+            input: "{}",
+            history: dataSyncHistory(1, null),
+          },
+          "rerun-9": {
+            status: "RUNNING",
+            startDate: hoursAgo(0.1),
+            input: JSON.stringify({ rerunOf: "manual-2" }),
+          },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expect(result.code).toBe(0);
+      expect(startedInput(result)).toEqual({ rerunOf: "manual-1" });
+    });
+  });
+
+  describe("準正常系", () => {
+    it.each([
+      {
+        label: "元の実行を DataSync の途中で止めた（閉じるイベントが無い）",
+        status: "ABORTED",
+        history: dataSyncHistory(1, null),
+      },
+      {
+        label:
+          "元の実行が DataSync の States.Timeout で失敗した（TaskTimedOut）",
+        status: "FAILED",
+        history: dataSyncHistory(6, "TaskTimedOut"),
+      },
+      {
+        label: "元の実行が DataSync の途中で TIMED_OUT になった",
+        status: "TIMED_OUT",
+        history: dataSyncHistory(1, null),
+      },
+      {
+        label: "タスクのタイムアウトの少し手前（15 分前に呼んだ）",
+        status: "ABORTED",
+        history: dataSyncHistory(15, null),
+      },
+      {
+        label:
+          "Retry した DataSync の最後の呼び出しが閉じていない（前の呼び出しは TaskFailed で閉じている）",
+        status: "ABORTED",
+        history: dataSyncHistory(1, null, 2),
+      },
+    ])(
+      "$label なら、起動せずに期限を出して 1 で終わる",
+      ({ status, history }) => {
+        const result = batch(
+          withExecutions({
+            "manual-1": { status, startDate: hoursAgo(0.5), history },
+          }),
+          ["rerun", "manual-1"],
+        );
+
+        expectRefused(
+          result,
+          "同じ論理キー manual-1 の実行 manual-1 は、データ連携が結果を返さずに終わりました",
+        );
+        expect(result.stderr).toMatch(
+          /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} まで動きうるため/,
+        );
+      },
+    );
+
+    it("同じ論理キーの別の再実行が実行中なら、元の実行が終わっていても断る", () => {
+      const result = batch(
+        withExecutions({
+          ...FAILED_MANUAL_1,
+          "rerun-1": {
+            status: "RUNNING",
+            startDate: hoursAgo(0.1),
+            input: JSON.stringify({ rerunOf: "manual-1" }),
+          },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expectRefused(
+        result,
+        "同じ論理キー manual-1 の実行 rerun-1 はまだ実行中です",
+      );
+    });
+
+    it.each([
+      { label: "最初の実行を渡した", name: "manual-1" },
+      { label: "別の再実行を渡した（再実行の再実行）", name: "rerun-2" },
+    ])("同じ論理キーの別の再実行を止めた直後なら断る（$label）", ({ name }) => {
+      const result = batch(
+        withExecutions({
+          ...FAILED_MANUAL_1,
+          "rerun-1": {
+            status: "ABORTED",
+            startDate: hoursAgo(0.2),
+            input: JSON.stringify({ rerunOf: "manual-1" }),
+            history: dataSyncHistory(1, null),
+          },
+          "rerun-2": {
+            status: "FAILED",
+            startDate: hoursAgo(0.1),
+            input: JSON.stringify({ rerunOf: "manual-1" }),
+            history: dataSyncHistory(1, "TaskFailed"),
+          },
+        }),
+        ["rerun", name],
+      );
+
+      expectRefused(
+        result,
+        "同じ論理キー manual-1 の実行 rerun-1 は、データ連携が結果を返さずに終わりました",
+      );
+    });
+  });
+
+  describe("異常系", () => {
+    it.each([
+      {
+        label: "実行の一覧を取得できない（認証切れ）",
+        failOn: { "list-executions": "ExpiredTokenException" },
+        message: "実行の一覧を取得できません",
+      },
+      {
+        label: "実行履歴を読めない（認証切れ）",
+        failOn: { "get-execution-history": "ExpiredTokenException" },
+        message: "実行 manual-1 の履歴を読めません",
+      },
+    ])("$label なら、起動せずに 1 で終わる", ({ failOn, message }) => {
+      const result = batch({ ...withExecutions(FAILED_MANUAL_1), failOn }, [
+        "rerun",
+        "manual-1",
+      ]);
+
+      expectRefused(result, message);
+    });
+
+    it("DataSync の呼び出しにタスクのタイムアウトが無ければ、期限を出せないため起動せずに 1 で終わる", () => {
+      const history = dataSyncHistory(30, null).map((event) =>
+        event["type"] === "TaskScheduled"
+          ? taskEvent(
+              "TaskScheduled",
+              String(
+                (event["taskScheduledEventDetails"] as { resource: string })
+                  .resource,
+              ),
+              String(event["timestamp"]),
+            )
+          : event,
+      );
+      const result = batch(
+        withExecutions({
+          "manual-1": { status: "ABORTED", startDate: hoursAgo(1), history },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expectRefused(
+        result,
+        "実行 manual-1 のデータ連携の呼び出しの時刻・タイムアウトを読めません",
+      );
+    });
+
+    it("実行の一覧に最初の実行が無ければ（一覧の欠け）、同じ論理キーの実行を確かめられないため起動せずに 1 で終わる", () => {
+      const result = batch(
+        withExecutions({
+          "manual-1": { ...FAILED_MANUAL_1["manual-1"], listed: false },
+        }),
+        ["rerun", "manual-1"],
+      );
+
+      expectRefused(result, "実行の一覧に最初の実行 manual-1 がありません");
     });
   });
 });

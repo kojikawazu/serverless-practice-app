@@ -627,6 +627,12 @@ describe("BatchStack（local）", () => {
       });
     });
 
+    it("#166: データ連携 Lambda の呼び出しがキューで待てるのは 60 秒（DataSync のタスクのタイムアウトに足す余裕と同じ）", () => {
+      template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+        MaximumEventAgeInSeconds: 60,
+      });
+    });
+
     it("local ではどの関数も LMI に紐付けない（LocalStack のライセンスで LMI の API を使えない）", () => {
       for (const fn of Object.values(json.Resources).filter(
         (r) => r.Type === "AWS::Lambda::Function",

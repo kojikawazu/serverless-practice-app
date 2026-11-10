@@ -1,5 +1,5 @@
 // scripts/batch.sh のテストで、PATH の先頭に置く偽の AWS CLI（test/scripts/batch.test.ts）。
-// batch.sh が呼ぶ Step Functions の 3 つの操作だけを、スクリプトが渡す --query の形に合わせて返す。
+// batch.sh が呼ぶ Step Functions の 5 つの操作だけを、スクリプトが渡す --query の形に合わせて返す。
 // 実行の結果（状態・エラー）を思いどおりに作るため、LocalStack ではなく外部 I/O（AWS CLI）だけをこれに差し替える（.claude/rules/testing.md）。
 // Node の型除去（--experimental-strip-types）でそのまま動かすため、型の注釈以外の TypeScript 固有の構文を使わない。
 //
@@ -13,6 +13,11 @@
 // - describe-execution の startDate は、オフセット付きの ISO 8601（`2026-11-09T22:43:36.932996+09:00`）。input は JSON の文字列
 // - 存在しない実行の describe-execution は、終了コード 254 で
 //   `aws: [ERROR]: An error occurred (ExecutionDoesNotExist) when calling the DescribeExecution operation: ...` を出す
+//
+// 実行履歴と一覧の形も LocalStack で観測したもの（aws-cli 2.37.10、2026-11-10、#166）に合わせる。実 AWS では観測していない:
+// - get-execution-history は `{ events: [...] }`。各イベントは id・timestamp（オフセット付きの ISO 8601）・type と、
+//   type ごとの `<type の先頭を小文字にした名前>EventDetails` を持つ。中身はテストが書いた値をそのまま返す
+// - list-executions は `{ executions: [...] }`。各要素は name・status・startDate を持ち、入力は持たない
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 /** 偽の Step Functions が持つ状態。テストが初期状態を書き、呼び出しの後に読んで確かめる */
@@ -46,6 +51,13 @@ export type FakeSfnState = {
       startDate?: string;
       /** 実行入力（JSON の文字列）。`undefined` なら項目ごと返さない */
       input?: string;
+      /**
+       * get-execution-history が返すイベント（観測した形で、テストが書く）。
+       * `undefined` なら空の列を返す（データ連携を呼ばずに終わった実行として扱われる）
+       */
+      history?: Record<string, unknown>[];
+      /** `false` なら list-executions に出さない（一覧の欠けを再現する）。既定は出す */
+      listed?: boolean;
     }
   >;
 };
@@ -165,6 +177,35 @@ switch (`${service ?? ""} ${operation ?? ""}`) {
         ...(state.cause === undefined ? {} : { cause: state.cause }),
       }),
     );
+    break;
+  }
+  case "stepfunctions list-executions": {
+    // 新しい順に返す（LocalStack・実 AWS の既定）。起動した実行（state.started）は、一覧を読むより後に始まるため含めない
+    const executions = Object.entries(state.executions ?? {})
+      .filter(([, execution]) => execution.listed !== false)
+      .map(([name, execution]) => ({
+        executionArn: `${EXECUTION_ARN_PREFIX}:batch:${name}`,
+        name,
+        status: execution.status,
+        ...(execution.startDate === undefined
+          ? {}
+          : { startDate: execution.startDate }),
+      }))
+      .reverse();
+    replyText(JSON.stringify({ executions }));
+    break;
+  }
+  case "stepfunctions get-execution-history": {
+    const executionArn = options["execution-arn"] ?? "";
+    const name = executionArn.slice(executionArn.lastIndexOf(":") + 1);
+    const existing = state.executions?.[name];
+    if (existing === undefined) {
+      fail(
+        "ExecutionDoesNotExist",
+        `Execution Does Not Exist: '${executionArn}'`,
+      );
+    }
+    replyText(JSON.stringify({ events: existing.history ?? [] }));
     break;
   }
   default:

@@ -17,7 +17,7 @@
 | UT（handler） | Vitest | 各 handler の分岐・検証・エラーの契約。スタブはインターフェース経由で本物を注入し、AWS SDK の呼び出し（SQS・S3・Step Functions）だけをモックする |
 | UT（スキーマ） | Vitest | Zod スキーマの受理・拒否の境界 |
 | UT（CDK） | Vitest + `aws-cdk-lib/assertions` | 合成したテンプレートの要点（ステートマシンの種類・タイムアウトの受け取り方・`Retry` の対象・`mutable: false`・イベントパターン・`DataSync` の呼び出し方・LMI の紐付け） |
-| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` と `rerun` も、終わらない・失敗する実行と、再実行の元の実行（状態・開始時刻・入力）を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。偽物の応答の形は LocalStack で観測したもの（#137）。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる）。`scripts/cdk.sh` の `diff` は、差分の出方（置換の有無・方法による違い・失敗）を思いどおりに作るため、CDK の CLI を呼ぶ `npx` を偽物（`test/scripts/helpers/fake-npx-cdk.ts`）に差し替えて確かめる |
+| UT（スクリプト） | Vitest + 偽の AWS CLI | `scripts/budget-alert.sh`。LocalStack が対応していない Budgets を、PATH の先頭の偽物（`test/scripts/helpers/fake-aws.ts`）で差し替えて確かめる。スクリプトは一時ディレクトリに複製し、手元の `.env` を読ませない。`scripts/batch.sh` の `run` と `rerun` も、終わらない・失敗する実行と、再実行の元の実行（状態・開始時刻・入力・実行履歴）と同じ論理キーの実行を思いどおりに作るため、Step Functions の偽物（`test/scripts/helpers/fake-aws-sfn.ts`）で確かめる。偽物の応答の形は LocalStack で観測したもの（#137・#166）。`scripts/check-doc-links.sh` は、一時ディレクトリに作った git のリポジトリに Markdown を置いて動かす（外部 I/O は無い。対象を git から引くところまで確かめる）。`scripts/cdk.sh` の `diff` は、差分の出方（置換の有無・方法による違い・失敗）を思いどおりに作るため、CDK の CLI を呼ぶ `npx` を偽物（`test/scripts/helpers/fake-npx-cdk.ts`）に差し替えて確かめる |
 | 静的検査（Terraform） | `terraform fmt` / `validate`（`scripts/lint-terraform.sh`） | 整形・構文・参照・型・プロバイダのロック |
 | IT | Vitest + LocalStack | `local` にデプロイした状態で実行を起動し、02 の受け入れ条件を自動で確かめる |
 | 手動確認 | AWS CLI | `dev` でのみ確かめられる点（Scheduler の定時起動・状態変化イベントによる通知・LMI での実行）。結果は 09「`dev` での検証結果」 |
@@ -72,7 +72,7 @@
 | 38 | データ連携: タスクトークンが読めれば、入力の不正・注入エラーを `SendTaskFailure` で返し（`error` はエラー名、`cause` は `errorType` / `errorMessage` の JSON）、例外を投げない | UT | 準正常系 |
 | 39 | データ連携: `SendTaskSuccess`・ハートビートが失敗したら `SendTaskFailure` で返し、`SendTaskFailure` も失敗したらエラーログを出して終える。`cause` のメッセージは 4,096 文字で切り詰める | UT | 異常系 |
 | 40 | スキーマ: `holdSeconds` は 0〜1,200 の整数だけを受理する（1,201・-1・1.5・文字列・`null` を拒否）。`taskToken` はデータ連携のタスク入力だけが受け付ける | UT | 準正常系 |
-| 41 | CDK: `DataSync` は `.waitForTaskToken` と `InvocationType: "Event"` で呼び、タイムアウト（関数 + 60 秒）とハートビート（300 秒）を持つ。データ連携 Lambda は非同期の呼び出しを再試行しない | UT | 異常系（設定ずれの検出） |
+| 41 | CDK: `DataSync` は `.waitForTaskToken` と `InvocationType: "Event"` で呼び、タイムアウト（関数 + 60 秒）とハートビート（300 秒）を持つ。データ連携 Lambda は非同期の呼び出しを再試行せず、キューで待てるのは 60 秒（#166） | UT | 異常系（設定ずれの検出） |
 | 42 | CDK: `dev` ではデータ連携 Lambda だけを SSM のキャパシティプロバイダに紐付け（実行環境は最小・最大 1、タイムアウト 1,800 秒）、`local` ではどの関数も紐付けない | UT | 異常系（設定ずれの検出） |
 | 43 | 予算アラートのスクリプト: 無ければ日次 1 USD の予算と実績 100% 超の通知を作り、2 回目は何も変えず、`--check` が 0 で終わる。通知先は環境変数か、`.env` の 1 行（`.env` を source しない） | UT | 正常系 |
 | 44 | 予算アラートのスクリプト: 額（#72 より前の 3 USD を含む）・通知先・余分な通知のずれだけを直す。`ThresholdType` が `ABSOLUTE_VALUE` の通知は、省かれた `PERCENTAGE` とは別の通知として消す（#69）。通知の一覧が `NotFoundException` でも、予算があれば通知 0 件として扱う | UT | 準正常系 |
@@ -125,6 +125,9 @@
 | 91 | `failAt: "dataSync"` で失敗した実行を `rerun` すると、再実行が `SUCCEEDED` になる。メール送信スタブのログは配信対象ごとに元の実行の 1 回だけで、再実行では配信対象ごとに「送信済みのため送りません」が出る。S3 の同じキーのファイルが再実行の `executionName` で上書きされ、BigQuery / Cuenote FC スタブのログが `runKey` 付きで出る（#137） | IT | 準正常系 |
 | 92 | `failAt: "consumer"` の実行のメッセージが DLQ へ移った後に `rerun` すると、メール送信スタブのログが配信対象ごとに 1 回出る。再実行の投入が、元の実行の投入から 5 分以内であることも確かめる（5 分を超えたら、重複排除 ID を引き継がない理由を確かめられていないため失敗にする。05「メールメッセージ」。#137） | IT | 準正常系 |
 | 93 | `dev` で、`holdSeconds` 付きの実行をデータ連携の待ちの途中で止め、実行の結果（`error` / `cause`）・実行履歴の最後のイベント・状態変化イベントの中身と、停止の後もデータ連携 Lambda（LMI）が待ちを終えるまで動くか、`SendTaskSuccess` / `SendTaskFailure` のエラー名、停止の前に積んだメッセージが送られるかを記録する（04「手動停止と実行の重なり」。LocalStack では 09「LocalStack での検証結果」で観測済み。実施は #167） | 手動 | 準正常系 |
+| 94 | `scripts/batch.sh` の `rerun`: 同じ論理キーの実行のデータ連携が結果を返した（`TaskSucceeded` / `TaskFailed`）・DataSync を呼んでいない・期限（DataSync の最後の呼び出し＋`timeoutInSeconds`）を過ぎたときは、終わった直後でも起動する。Retry した DataSync は最後の呼び出しだけを見る。論理キーの違う実行は、止めた直後・実行中でも見ない（#166） | UT | 正常系 |
+| 95 | `scripts/batch.sh` の `rerun`: 同じ論理キーの実行（ほかの再実行を含む）が `RUNNING` のとき、またはデータ連携が結果を返さずに終わり（閉じるイベントが無い・`TaskTimedOut`）期限の前のときは、期限を出して `start-execution` を呼ばずに 1 で終える。期限の少し手前（15 分前に呼んだ）も断る（#166） | UT | 準正常系 |
+| 96 | `scripts/batch.sh` の `rerun`: 実行の一覧・実行履歴を読めない、DataSync の呼び出しに `timeoutInSeconds` が無い、実行の一覧に最初の実行が無いときは、判定不能として `start-execution` を呼ばずに 1 で終える（#166） | UT | 異常系 |
 
 次のケースは、確かめている流れを 03「処理の流れ」の図で追える。
 
