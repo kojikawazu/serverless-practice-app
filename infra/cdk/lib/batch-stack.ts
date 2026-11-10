@@ -66,7 +66,10 @@ const DATA_SYNC_TIMEOUT_SECONDS = { lmi: 1800, standard: 900 } as const;
 
 /**
  * `DataSync` タスクのタイムアウトに、関数のタイムアウトへ足す余裕（秒）。
- * LMI はタイムアウトしてもコードを止めないため、ステートマシン側で必ず打ち切る
+ * LMI はタイムアウトしてもコードを止めないため、ステートマシン側で必ず打ち切る。
+ * 非同期の呼び出しが Lambda のキューで待てる最大時間（`maxEventAge`。設定できる最小値の 60 秒）にも同じ値を使う。
+ * これで、通常の Lambda は「`DataSync` が関数を呼んでから、タスクのタイムアウトまで」に始まって終わる。
+ * `scripts/batch.sh rerun` は、結果を返さずに終わった実行のデータ連携が、この期限まで動きうるとみなす（docs/03「`rerun` が断る条件」）
  */
 const DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS = 60;
 
@@ -194,6 +197,8 @@ export class BatchStack extends Stack {
         // 関数は結果を返したら投げない作りだが、設定でも止める。付くのは $LATEST の設定だけだが、LMI で実行が
         // $LATEST.PUBLISHED に回る修飾子なしの呼び出しにも、この設定が効く（docs/09「`dev` での検証結果」の「LMI」。#70）
         retryAttempts: 0,
+        // キューで待たされた呼び出しを、タスクが終わった後に動かさない（上の DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS）
+        maxEventAge: Duration.seconds(DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS),
         // LMI は AWS SDK v3 3.933.0 以上を求める。ランタイム同梱の SDK の版に頼らず、ロックファイルの版を同梱する
         bundleAwsSdk: true,
         environment: { BUCKET_NAME: this.ssmValue("bucket/name") },
@@ -451,6 +456,7 @@ export class BatchStack extends Stack {
    * @param options.environment - STAGE 以外の環境変数
    * @param options.memorySize - メモリ（MB）。省略時は 256（docs/04「パフォーマンス要件」）
    * @param options.retryAttempts - 非同期の呼び出しの再試行回数。省略時は Lambda の既定（2 回）
+   * @param options.maxEventAge - 非同期の呼び出しがキューで待てる最大時間。省略時は Lambda の既定（6 時間）
    * @param options.bundleAwsSdk - AWS SDK を同梱するなら true。省略時はランタイム同梱の SDK を使う
    * @returns 作った Lambda
    */
@@ -463,6 +469,7 @@ export class BatchStack extends Stack {
       environment: Record<string, string>;
       memorySize?: number;
       retryAttempts?: number;
+      maxEventAge?: Duration;
       bundleAwsSdk?: boolean;
     },
   ): nodejs.NodejsFunction {
@@ -480,6 +487,9 @@ export class BatchStack extends Stack {
       ...(options.retryAttempts === undefined
         ? {}
         : { retryAttempts: options.retryAttempts }),
+      ...(options.maxEventAge === undefined
+        ? {}
+        : { maxEventAge: options.maxEventAge }),
       role: this.importRole(`${id}Role`, `role/${name}/arn`),
       // Terraform のポリシーが書き込みを許すロググループの名前に合わせ、削除時に一緒に消す（docs/04「保持期間」）
       logGroup: new logs.LogGroup(this, `${id}LogGroup`, {
