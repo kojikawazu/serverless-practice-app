@@ -72,7 +72,7 @@
 | 38 | データ連携: タスクトークンが読めれば、入力の不正・注入エラーを `SendTaskFailure` で返し（`error` はエラー名、`cause` は `errorType` / `errorMessage` の JSON）、例外を投げない | UT | 準正常系 |
 | 39 | データ連携: `SendTaskSuccess`・ハートビートが失敗したら `SendTaskFailure` で返し、`SendTaskFailure` も失敗したらエラーログを出して終える。`cause` のメッセージは 4,096 文字で切り詰める | UT | 異常系 |
 | 40 | スキーマ: `holdSeconds` は 0〜1,200 の整数だけを受理する（1,201・-1・1.5・文字列・`null` を拒否）。`taskToken` はデータ連携のタスク入力だけが受け付ける | UT | 準正常系 |
-| 41 | CDK: `DataSync` は `.waitForTaskToken` と `InvocationType: "Event"` で呼び、タイムアウト（関数 + 60 秒）とハートビート（300 秒）を持つ。データ連携 Lambda は非同期の呼び出しを再試行せず、キューで待てるのは 60 秒（#166） | UT | 異常系（設定ずれの検出） |
+| 41 | CDK: `DataSync` は `.waitForTaskToken` と `InvocationType: "Event"` で呼び、タイムアウト（関数 + 60 秒）とハートビート（300 秒）を持つ。データ連携 Lambda は非同期の呼び出しを再試行せず、キューで待てるのは 60 秒（#166）。設定は `DataSync` が呼ぶ版に付ける（#170。#97） | UT | 異常系（設定ずれの検出） |
 | 42 | CDK: `dev` ではデータ連携 Lambda だけを SSM のキャパシティプロバイダに紐付け（実行環境は最小・最大 1、タイムアウト 1,800 秒）、`local` ではどの関数も紐付けない | UT | 異常系（設定ずれの検出） |
 | 43 | 予算アラートのスクリプト: 無ければ日次 1 USD の予算と実績 100% 超の通知を作り、2 回目は何も変えず、`--check` が 0 で終わる。通知先は環境変数か、`.env` の 1 行（`.env` を source しない） | UT | 正常系 |
 | 44 | 予算アラートのスクリプト: 額（#72 より前の 3 USD を含む）・通知先・余分な通知のずれだけを直す。`ThresholdType` が `ABSOLUTE_VALUE` の通知は、省かれた `PERCENTAGE` とは別の通知として消す（#69）。通知の一覧が `NotFoundException` でも、予算があれば通知 0 件として扱う | UT | 準正常系 |
@@ -128,6 +128,8 @@
 | 94 | `scripts/batch.sh` の `rerun`: 同じ論理キーの実行のデータ連携が結果を返した（`TaskSucceeded` / `TaskFailed`）・DataSync を呼んでいない・期限（DataSync の最後の呼び出し＋`timeoutInSeconds`）を過ぎたときは、終わった直後でも起動する。Retry した DataSync は最後の呼び出しだけを見る。論理キーの違う実行は、止めた直後・実行中でも見ない（#166） | UT | 正常系 |
 | 95 | `scripts/batch.sh` の `rerun`: 同じ論理キーの実行（ほかの再実行を含む）が `RUNNING` のとき、またはデータ連携が結果を返さずに終わり（閉じるイベントが無い・`TaskTimedOut`）期限の前のときは、期限を出して `start-execution` を呼ばずに 1 で終える。期限の少し手前（15 分前に呼んだ）も断る（#166） | UT | 準正常系 |
 | 96 | `scripts/batch.sh` の `rerun`: 実行の一覧・実行履歴を読めない、DataSync の呼び出しに `timeoutInSeconds` が無い、実行の一覧に最初の実行が無いときは、判定不能として `start-execution` を呼ばずに 1 で終える（#166） | UT | 異常系 |
+| 97 | CDK: `dev`（LMI）では `DataSync` が `:$LATEST.PUBLISHED` を明示してデータ連携 Lambda を呼び、`EventInvokeConfig` もその版に付ける（再試行 0・60 秒）。`local` は修飾子なしで呼び、設定は `$LATEST` に付ける（`$LATEST` を明示した設定は LMI で拒否される。#170） | UT | 異常系（設定ずれの検出） |
+| 98 | `dev` で、`stack.sh dev up` が通り、`DataSync` が `:$LATEST.PUBLISHED` で呼んだ実行が `SUCCEEDED` になる。必ず投げる版を `:$LATEST.PUBLISHED` で Event で呼ぶと、設定（再試行 0）どおり起動は 1 回で、再試行 2・待てる時間 21,600 秒に変えた対照では 3 回になる（09「`dev` での検証結果」の「`$LATEST` に設定を付けられなくなった」。#170） | 手動 | 異常系 |
 
 次のケースは、確かめている流れを 03「処理の流れ」の図で追える。
 

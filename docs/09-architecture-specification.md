@@ -307,8 +307,8 @@ LocalStack では使えない LMI（下記「LMI（Lambda Managed Instances）�
 | インスタンスが見えるか | **`describe-instances` の既定の応答には出ない。** LMI のインスタンスは `Operator`（`Managed: true`・`Principal: scaler.lambda.amazonaws.com`・`HiddenByDefault: true`）付きで、`--include-managed-resources` を付けたときだけ出る。付けないと、動いていても 0 件に見える | 同じ時点で、付けた場合（3 件）と付けない場合（0 件）を比べた |
 | パブリック IP | **3 台とも付いた。** サブネットの自動割り当て（`map_public_ip_on_launch`）で足りる。料金はパブリック IPv4 の 1 アドレス $0.005/時 | `describe-instances --include-managed-resources` の `PublicIpAddress` |
 | 実行環境数を最小・最大 1 にして台数が減るか | **減る。** 起動の約 8 分後に 2 台が終了し、1 台になった（10/15 も約 10 分後に同じ動き）。起動直後は設定にかかわらず 3 台・3 環境で始まる。`get-function-scaling-config` の `AppliedFunctionScalingConfig` は最小・最大 1 | キャパシティプロバイダのログ。`describe-instances --include-managed-resources` |
-| 呼び出される版 | ステートマシンは修飾子なしの ARN で呼ぶが、**実行は `$LATEST.PUBLISHED` で動く**（プラットフォームログの `functionArn`） | データ連携 Lambda のロググループの `platform.start` |
-| 非同期の再試行 0 が効くか | **効く（2026-10-17 に確かめた。#70）。** 設定（`MaximumRetryAttempts: 0`）は `$LATEST` にだけあるが、**非同期の呼び出しの設定は、呼び出し側が指定した修飾子で決まり、実行される版では決まらない。** 修飾子なしの呼び出し（ステートマシンの呼び方）は、実行が `$LATEST.PUBLISHED` に回っても `$LATEST` の設定で再試行する。環境変数 `STAGE` を不正な値にして関数を必ず投げさせ、`{}` を Event で直接呼んで、4 分半の間の `platform.start` を数えた（再試行は同じ `requestId` で約 1 分後・さらに約 2 分後に起動する）。`$LATEST`=0・`$LATEST.PUBLISHED`=0 → 1 回、`$LATEST`=0・`$LATEST.PUBLISHED`=2 → 1 回、`$LATEST`=2・`$LATEST.PUBLISHED`=0 → **3 回**（いずれも修飾子なし）、`:$LATEST.PUBLISHED` を付けて `$LATEST`=0・`$LATEST.PUBLISHED`=2 → **3 回**。再試行が起きないときは、受け付けと同じ 1 分の中で `AsyncEventsDropped` が 1 になった。したがって `$LATEST.PUBLISHED` に設定を付ける必要は無い（呼ぶ側が修飾子を付けないため） | `update-function-configuration` で `$LATEST` の環境変数を変え、`publish-version --publish-to LATEST_PUBLISHED` で `$LATEST.PUBLISHED` へ出し直した（同じ zip の `update-function-code --publish-to LATEST_PUBLISHED` では出し直されなかった）。再試行回数は `update-function-event-invoke-config` で修飾子ごとに変えた。起動はロググループの `platform.start`（`requestId`・`version`）、破棄は `AsyncEventsDropped` で数えた。変えた設定は `scripts/stack.sh dev down` でスタックごと消した |
+| 呼び出される版 | ステートマシンは修飾子なしの ARN で呼ぶが、**実行は `$LATEST.PUBLISHED` で動く**（プラットフォームログの `functionArn`）。今は `:$LATEST.PUBLISHED` を明示して呼んでいる（下記「[`$LATEST` に設定を付けられなくなった](#latest-に設定を付けられなくなった2026-11-11170)」） | データ連携 Lambda のロググループの `platform.start` |
+| 非同期の再試行 0 が効くか | **効く（2026-10-17 に確かめた。#70）。** この行は修飾子なしで呼んでいたときの記録。今は `:$LATEST.PUBLISHED` を明示して呼び、その版の設定で止めている（#170。下記）。設定（`MaximumRetryAttempts: 0`）は `$LATEST` にだけあるが、**非同期の呼び出しの設定は、呼び出し側が指定した修飾子で決まり、実行される版では決まらない。** 修飾子なしの呼び出し（ステートマシンの呼び方）は、実行が `$LATEST.PUBLISHED` に回っても `$LATEST` の設定で再試行する。環境変数 `STAGE` を不正な値にして関数を必ず投げさせ、`{}` を Event で直接呼んで、4 分半の間の `platform.start` を数えた（再試行は同じ `requestId` で約 1 分後・さらに約 2 分後に起動する）。`$LATEST`=0・`$LATEST.PUBLISHED`=0 → 1 回、`$LATEST`=0・`$LATEST.PUBLISHED`=2 → 1 回、`$LATEST`=2・`$LATEST.PUBLISHED`=0 → **3 回**（いずれも修飾子なし）、`:$LATEST.PUBLISHED` を付けて `$LATEST`=0・`$LATEST.PUBLISHED`=2 → **3 回**。再試行が起きないときは、受け付けと同じ 1 分の中で `AsyncEventsDropped` が 1 になった。したがって `$LATEST.PUBLISHED` に設定を付ける必要は無い（呼ぶ側が修飾子を付けないため） | `update-function-configuration` で `$LATEST` の環境変数を変え、`publish-version --publish-to LATEST_PUBLISHED` で `$LATEST.PUBLISHED` へ出し直した（同じ zip の `update-function-code --publish-to LATEST_PUBLISHED` では出し直されなかった）。再試行回数は `update-function-event-invoke-config` で修飾子ごとに変えた。起動はロググループの `platform.start`（`requestId`・`version`）、破棄は `AsyncEventsDropped` で数えた。変えた設定は `scripts/stack.sh dev down` でスタックごと消した |
 | 通常の実行 | **`SUCCEEDED`。** メール送信スタブ 3 件・S3 の連携ファイル・BigQuery / Cuenote FC スタブのログがそろい、Slack スタブのログは出なかった | `scripts/batch.sh dev run`・`logs` |
 | `failAt: "dataSync"` | **`FAILED`（`InjectedFailureError`）。** データ連携 Lambda が `SendTaskFailure` で返し、Slack スタブのログに実行 ARN・`FAILED`・エラー名が出た | `scripts/batch.sh dev run dataSync`・`logs` |
 | `holdSeconds: 960` | **`SUCCEEDED`。** 実行は 16 分 2.6 秒、データ連携 Lambda の実行時間は 961.9 秒で、15 分を超えた。待つ間に 3 台のうち 2 台が終了したが、実行していた環境は残った 1 台にあり、途切れなかった。最後の `SendTaskSuccess` が通り、長い実行の間に認証情報・接続は切れなかった | `scripts/batch.sh dev run --hold-seconds 960`（最大 1,320 秒待つ） |
@@ -331,6 +331,20 @@ LocalStack では使えない LMI（下記「LMI（Lambda Managed Instances）�
 | 誰がロググループを作ったか・作り直したか | CloudTrail の `CreateLogGroup`（`userIdentity`・`userAgent`）。Terraform は `APN/1.0`、LMI は `scaler.lambda.amazonaws.com` |
 | 削除の順序 | CloudTrail の `DeleteFunction`・`DeleteCapacityProvider`・`TerminateInstances`・`DeleteLogGroup` の時刻 |
 | 削除の順序が設定に入っていること | `terraform graph` に「プロバイダ → ロググループ」の辺がある。`depends_on` から外すと辺が消えることも確かめた |
+
+#### `$LATEST` に設定を付けられなくなった（2026-11-11。#170）
+
+`scripts/stack.sh dev up` が、CDK のデプロイで 2 回続けて失敗した（`ROLLBACK_COMPLETE`）。失敗したのは `AWS::Lambda::EventInvokeConfig`（データ連携 Lambda の非同期の呼び出しの設定）で、10/15〜10/22 の 6 回のデプロイでは通っていた。原因を確かめるため、`dev` でだけ一時的にこの設定を作らない構成でデプロイし、関数が残った状態で読んだ（実 AWS）。
+
+| 点 | 結果 | 確かめ方 |
+|---|---|---|
+| 拒否された呼び出し | **`$LATEST` を明示した `PutFunctionEventInvokeConfig` が `InvalidParameterValueException`（`Function serverless-practice-app-dev-data-sync is not in valid state.`）で拒否された。** 1 回目は `maximumRetryAttempts: 0`・`maximumEventAgeInSeconds: 60`（14:14:52Z）、2 回目は 10 月に通ったときと同じ `maximumRetryAttempts: 0` だけ（14:35:15Z）で、どちらも同じ拒否だった。`CreateFunction` からの間隔はどちらも約 3 分 14〜15 秒で、10 月と同じだった | CloudTrail の `PutFunctionEventInvokeConfig`（`requestParameters`・`errorCode`・`errorMessage`）。10 月の 6 回も同じ検索で比べた |
+| 関数の状態 | **`$LATEST` は `State: ActiveNonInvocable`、`$LATEST.PUBLISHED` は `State: Active`**（どちらも `LastUpdateStatus: Successful`。デプロイの約 3 分後） | `get-function-configuration --qualifier`（14:47:53Z） |
+| 修飾子ごとの応答 | **`--qualifier '$LATEST'` を付けた put だけが拒否された**（デプロイの約 6 分後でも同じで、タイミングの問題ではない）。修飾子なしの put は通り、`FunctionArn` が `:$LATEST` の設定として保存された（`--qualifier '$LATEST'` の get でも同じ設定が読めた）。`--qualifier '$LATEST.PUBLISHED'` の put も通った。`MaximumEventAgeInSeconds: 60` は、修飾子なしの update でも `$LATEST.PUBLISHED` の put でも受け付けられた | `put-function-event-invoke-config` / `update-function-event-invoke-config` / `get-function-event-invoke-config`（14:48:02〜17Z）。試した設定は、修正のデプロイの前にすべて消した |
+| 修正後のデプロイ | **通った。** ステートマシンは `:$LATEST.PUBLISHED` を明示して呼び、`EventInvokeConfig` は `Qualifier: $LATEST.PUBLISHED` で作られた（再試行 0・60 秒）。修飾子を明示した呼び出しでも、実行は `$LATEST.PUBLISHED` で動き（`platform.start` の `functionArn`）、通常の実行は `SUCCEEDED` になった | `cdk.sh dev deploy`（更新）。`list-function-event-invoke-configs`。`scripts/batch.sh dev run` |
+| 再試行 0 が効くか | **効く。** `:$LATEST.PUBLISHED` を付けて呼ぶと、その版の設定で再試行回数が決まった。`$LATEST.PUBLISHED` の設定ごとに、必ず投げる版を Event で 1 回呼び、4 分半の `platform.start` を数えた。再試行 0・60 秒 → 1 回、再試行 2・**60 秒** → 1 回、再試行 2・21,600 秒 → **3 回**（同じ `requestId` で 0 秒・約 56 秒・約 2 分 57 秒）。`AsyncEventsDropped` は、それぞれの呼び出しの分に 1 ずつ出た。**60 秒の設定だけでも再試行は起きなかった**（再試行は約 1 分後に起き、その前にイベントが待てる時間を超える）ため、再試行回数の確認には 3 つ目の対照が要った | #70 と同じ方法（環境変数 `STAGE` を不正な値にして `publish-version --publish-to LATEST_PUBLISHED`。2026-11-11 15:14〜15:28Z）。変えた設定はスタックごと消した |
+
+10 月には `$LATEST` を明示した put が通っていたため、その後にサービス側の扱いが変わったと推論している（いつ変わったかは観測していない）。`$LATEST` が呼べない版になっている以上、修飾子なしの呼び出しに `$LATEST` の設定が効くという #70 の観測に頼らず、呼ぶ版と設定を付ける版を `$LATEST.PUBLISHED` にそろえた（下記「[対象の段と呼び出し方](#対象の段と呼び出し方)」）。
 
 ## CI とマージの条件
 
@@ -395,8 +409,8 @@ LMI で動かすのは**データ連携 Lambda だけ**にする。元資料で�
 | 結果を返せない（タスクトークンが無い・`SendTask*` が失敗した・関数が途中で落ちた） | エラーログを 1 行出して終える | ハートビートかタスクのタイムアウトで `FAILED`（どちらも `States.Timeout`。ハートビート切れは LocalStack で観測し、実 AWS は未観測。「LocalStack での検証結果」）。待ち続けず、判定不能を成功にも丸めない |
 
 - Lambda 側の非同期呼び出しの再試行（既定 2 回）は **0 にする**。再試行すると同じタスクトークンで処理が二重に走り、S3・スタブへの書き込みが重なる。再試行は今と同じく Step Functions の `Retry`（呼び出しそのものの一時的なエラーだけ）に任せる
-  - 設定は関数の `$LATEST` に付けるだけでよい。非同期の呼び出しの設定は呼び出し側が指定した修飾子で決まり、修飾子なしの呼び出しは、実行が `$LATEST.PUBLISHED` に回っても `$LATEST` の設定を使う（上記「`dev` での検証結果」の「LMI」。#70）
-- 呼び出しがキューで待てる時間（`maxEventAge`）は 60 秒にする（04「パフォーマンス要件」・#166）。タスクが終わった後に、待たされた呼び出しが動いて書き込むのを防ぎ、`rerun` が「呼び出し＋タスクのタイムアウト」を期限にできるようにする。LMI で `$LATEST` の設定が効くかは、再試行回数（上）と同じ設定の仕組みのため効くと推論しているが、未観測（#167）
+  - 非同期の呼び出しの設定は、呼び出し側が指定した修飾子で決まる（#70）。LMI の `$LATEST` は呼べない版（`ActiveNonInvocable`）で、`$LATEST` を明示した設定は拒否される（#170）。そのため `dev` では `DataSync` から `:$LATEST.PUBLISHED` を明示して呼び、設定もその版に付ける。`local`（LMI を使わない）は修飾子なしで呼び、設定は `$LATEST` に付ける（上記「`dev` での検証結果」の「[`$LATEST` に設定を付けられなくなった](#latest-に設定を付けられなくなった2026-11-11170)」）
+- 呼び出しがキューで待てる時間（`maxEventAge`）は 60 秒にする（04「パフォーマンス要件」・#166）。タスクが終わった後に、待たされた呼び出しが動いて書き込むのを防ぎ、`rerun` が「呼び出し＋タスクのタイムアウト」を期限にできるようにする。LMI では、`$LATEST.PUBLISHED` に付けた 60 秒が受け付けられることと、この設定だけで非同期の再試行も起きなくなることを確かめた（#170）。キューで待たされる場面そのものは観測していない
 - 関数は、待っている間 60 秒ごとに `SendTaskHeartbeat` を送る
 - `.waitForTaskToken` と `InvocationType: "Event"` の**併用は、公式の例が見つからなかった**（禁止する記述も無い）。設計の要なので、実装の最初に LocalStack と `dev` で確かめる
 

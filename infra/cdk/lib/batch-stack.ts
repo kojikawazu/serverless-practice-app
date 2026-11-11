@@ -91,6 +91,12 @@ const LMI_MEMORY_GIB_PER_VCPU = 2;
 const LMI_EXECUTION_ENVIRONMENTS = 1;
 
 /**
+ * LMI の関数で実際に動く版の修飾子。`PublishToLatestPublished` で、デプロイのたびに `$LATEST` の内容がこの版へ出る。
+ * `$LATEST` は `State: ActiveNonInvocable`（呼べない版）になる（実 AWS、2026-11-11、#170。docs/09「LMI」）
+ */
+const LMI_PUBLISHED_VERSION = "$LATEST.PUBLISHED";
+
+/**
  * Scheduler がステートマシンの呼び出しをやり直す最大回数。サービスの既定（dev で観測した値）と同じ値を明示し、
  * 既定に頼らずテンプレートと UT で見えるようにする（docs/04「リトライ」）
  */
@@ -193,12 +199,6 @@ export class BatchStack extends Stack {
       {
         timeout: Duration.seconds(dataSyncTimeoutSeconds),
         memorySize: DATA_SYNC_MEMORY_MB,
-        // 非同期の呼び出しの再試行（既定 2 回）を止め、同じタスクトークンで処理を二重に走らせない。
-        // 関数は結果を返したら投げない作りだが、設定でも止める。付くのは $LATEST の設定だけだが、LMI で実行が
-        // $LATEST.PUBLISHED に回る修飾子なしの呼び出しにも、この設定が効く（docs/09「`dev` での検証結果」の「LMI」。#70）
-        retryAttempts: 0,
-        // キューで待たされた呼び出しを、タスクが終わった後に動かさない（上の DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS）
-        maxEventAge: Duration.seconds(DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS),
         // LMI は AWS SDK v3 3.933.0 以上を求める。ランタイム同梱の SDK の版に頼らず、ロックファイルの版を同梱する
         bundleAwsSdk: true,
         environment: { BUCKET_NAME: this.ssmValue("bucket/name") },
@@ -207,6 +207,22 @@ export class BatchStack extends Stack {
     if (useLmi) {
       this.attachCapacityProvider(dataSync);
     }
+    // ステートマシンが呼ぶ対象。非同期の呼び出しの設定は、呼ぶ側が指定した修飾子の設定が効く（docs/09「LMI」。#70）ため、
+    // 呼ぶ対象と設定を付ける対象を同じものにする。LMI の $LATEST は呼べない版で、$LATEST を明示して設定を付けると
+    // 拒否される（#170）。LMI では実際に動く $LATEST.PUBLISHED を明示して呼び、その版に設定を付ける
+    const dataSyncTarget: lambda.IFunction = useLmi
+      ? lambda.Version.fromVersionAttributes(this, "DataSyncLatestPublished", {
+          lambda: dataSync,
+          version: LMI_PUBLISHED_VERSION,
+        })
+      : dataSync;
+    dataSyncTarget.configureAsyncInvoke({
+      // 非同期の呼び出しの再試行（既定 2 回）を止め、同じタスクトークンで処理を二重に走らせない。
+      // 関数は結果を返したら投げない作りだが、設定でも止める
+      retryAttempts: 0,
+      // キューで待たされた呼び出しを、タスクが終わった後に動かさない（上の DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS）
+      maxEventAge: Duration.seconds(DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS),
+    });
     const notifySlack = this.createFunction(
       "NotifySlackFunction",
       "notify-slack",
@@ -238,7 +254,7 @@ export class BatchStack extends Stack {
     ]);
     const dataSyncTask = this.createCallbackTask(
       "DataSync",
-      dataSync,
+      dataSyncTarget,
       TRANSIENT_LAMBDA_ERRORS,
       dataSyncTimeoutSeconds + DATA_SYNC_TASK_TIMEOUT_MARGIN_SECONDS,
     );
@@ -455,8 +471,6 @@ export class BatchStack extends Stack {
    * @param options.timeout - タイムアウト
    * @param options.environment - STAGE 以外の環境変数
    * @param options.memorySize - メモリ（MB）。省略時は 256（docs/04「パフォーマンス要件」）
-   * @param options.retryAttempts - 非同期の呼び出しの再試行回数。省略時は Lambda の既定（2 回）
-   * @param options.maxEventAge - 非同期の呼び出しがキューで待てる最大時間。省略時は Lambda の既定（6 時間）
    * @param options.bundleAwsSdk - AWS SDK を同梱するなら true。省略時はランタイム同梱の SDK を使う
    * @returns 作った Lambda
    */
@@ -468,8 +482,6 @@ export class BatchStack extends Stack {
       timeout: Duration;
       environment: Record<string, string>;
       memorySize?: number;
-      retryAttempts?: number;
-      maxEventAge?: Duration;
       bundleAwsSdk?: boolean;
     },
   ): nodejs.NodejsFunction {
@@ -484,12 +496,6 @@ export class BatchStack extends Stack {
       architecture: lambda.Architecture.ARM_64,
       memorySize: options.memorySize ?? 256,
       timeout: options.timeout,
-      ...(options.retryAttempts === undefined
-        ? {}
-        : { retryAttempts: options.retryAttempts }),
-      ...(options.maxEventAge === undefined
-        ? {}
-        : { maxEventAge: options.maxEventAge }),
       role: this.importRole(`${id}Role`, `role/${name}/arn`),
       // Terraform のポリシーが書き込みを許すロググループの名前に合わせ、削除時に一緒に消す（docs/04「保持期間」）
       logGroup: new logs.LogGroup(this, `${id}LogGroup`, {

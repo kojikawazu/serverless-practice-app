@@ -67,7 +67,11 @@ function stateMachineDefinition(json: TemplateJson): {
       Resource: string;
       TimeoutSeconds?: number;
       HeartbeatSeconds?: number;
-      Arguments: { Payload: string; InvocationType?: string };
+      Arguments: {
+        FunctionName: string;
+        Payload: string;
+        InvocationType?: string;
+      };
       Output: string;
     }
   >;
@@ -627,6 +631,16 @@ describe("BatchStack（local）", () => {
       });
     });
 
+    it("#170: LMI を使わない local では、DataSync はデータ連携 Lambda を修飾子なしで呼び、設定は $LATEST に付ける", () => {
+      const { States } = stateMachineDefinition(json);
+
+      expect(States.DataSync?.Arguments.FunctionName).toBe("<TOKEN>");
+      template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+        FunctionName: { Ref: Match.stringLikeRegexp("^DataSyncFunction") },
+        Qualifier: "$LATEST",
+      });
+    });
+
     it("#166: データ連携 Lambda の呼び出しがキューで待てるのは 60 秒（DataSync のタスクのタイムアウトに足す余裕と同じ）", () => {
       template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
         MaximumEventAgeInSeconds: 60,
@@ -710,6 +724,24 @@ describe("BatchStack（dev）", () => {
         : [],
     );
     expect(attached).toEqual(["serverless-practice-app-dev-data-sync"]);
+  });
+
+  it("#170: DataSync は LMI で実際に動く $LATEST.PUBLISHED を明示して呼ぶ（$LATEST は呼べない版）", () => {
+    const { States } = stateMachineDefinition(devJson);
+
+    expect(States.DataSync?.Arguments.FunctionName).toBe(
+      "<TOKEN>:$LATEST.PUBLISHED",
+    );
+  });
+
+  it("#170: 非同期の呼び出しの設定は、呼ぶ版（$LATEST.PUBLISHED）に付ける。$LATEST を明示した設定は LMI で拒否される", () => {
+    dev.resourceCountIs("AWS::Lambda::EventInvokeConfig", 1);
+    dev.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+      FunctionName: { Ref: Match.stringLikeRegexp("^DataSyncFunction") },
+      Qualifier: "$LATEST.PUBLISHED",
+      MaximumRetryAttempts: 0,
+      MaximumEventAgeInSeconds: 60,
+    });
   });
 
   it("DataSync は関数のタイムアウト（1,800 秒。LMI で 15 分を超える）に 60 秒を足して打ち切る", () => {
