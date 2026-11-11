@@ -114,7 +114,7 @@ S3 のキーの日付と `exportedAt` は、同じ時刻（UTC）から作る。
 
 `holdSeconds` を付けた実行。データ連携 Lambda は LMI で動き、Lambda の 15 分の上限を超えて待つ（09「[LMI（Lambda Managed Instances）](09-architecture-specification.md#lmilambda-managed-instances)」）。図の観測値は `dev` で確かめたもの（09「[`dev` での検証結果](09-architecture-specification.md#dev-での検証結果)」の「LMI」。#66）。`local` は LMI を使わないため、15 分を超えては待てない。
 
-![15 分を超える処理のシーケンス図。開発者が holdSeconds 960 で実行を始め、投入とメールの送信は正常系と同じ。Step Functions はデータ連携 Lambda を修飾子なしで非同期に呼び、LMI の公開版で動く。関数は MySQL スタブから取得して S3・BigQuery・Cuenote FC へ書き、holdSeconds の間ハートビートを送り続ける。待つ間に 3 台中 2 台のインスタンスが終了しても途切れず、SendTaskSuccess を返して SUCCEEDED になる。dev で実行 16 分 2.6 秒・関数 961.9 秒だった](images/sequences/long-run-lmi.drawio.svg)
+![15 分を超える処理のシーケンス図。開発者が holdSeconds 960 で実行を始め、投入とメールの送信は正常系と同じ。Step Functions はデータ連携 Lambda を LMI の公開版（$LATEST.PUBLISHED）を指定して非同期に呼ぶ。関数は MySQL スタブから取得して S3・BigQuery・Cuenote FC へ書き、holdSeconds の間ハートビートを送り続ける。待つ間に 3 台中 2 台のインスタンスが終了しても途切れず、SendTaskSuccess を返して SUCCEEDED になる。dev で実行 16 分 2.6 秒・関数 961.9 秒だった](images/sequences/long-run-lmi.drawio.svg)
 
 #### 一時的なエラーを `Retry` で吸収する
 
